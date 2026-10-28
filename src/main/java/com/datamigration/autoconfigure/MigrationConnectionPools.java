@@ -4,6 +4,9 @@ import com.zaxxer.hikari.HikariDataSource;
 import com.datamigration.properties.MigrationProperties.Endpoint;
 import java.sql.Connection;
 import java.sql.SQLException;
+import com.datamigration.api.DatabaseCredentialsProvider;
+import com.datamigration.api.DatabaseCredentialsProvider.EndpointRole;
+import java.util.function.Function;
 
 /**
  * Owns two lazy pools; intentionally NOT a DataSource bean.
@@ -16,10 +19,17 @@ public final class MigrationConnectionPools implements AutoCloseable, com.datami
     private HikariDataSource sourcePool;
     private HikariDataSource targetPool;
     private boolean closed;
+    private final Function<String, DatabaseCredentialsProvider> providers;
 
     public MigrationConnectionPools(Endpoint source, Endpoint target) {
+        this(source, target, name -> { throw new IllegalArgumentException("No credentials provider registry: " + name); });
+    }
+
+    public MigrationConnectionPools(Endpoint source, Endpoint target,
+                                    Function<String, DatabaseCredentialsProvider> providers) {
         this.source = source;
         this.target = target;
+        this.providers = java.util.Objects.requireNonNull(providers);
     }
 
     public Connection openSourceConnection() throws SQLException {
@@ -33,13 +43,13 @@ public final class MigrationConnectionPools implements AutoCloseable, com.datami
     // Do not hold the lifecycle lock while waiting for a pooled connection.
     private synchronized HikariDataSource sourcePool() {
         checkOpen();
-        if (sourcePool == null) sourcePool = create(source, "migration-source");
+        if (sourcePool == null) sourcePool = create(source, "migration-source", EndpointRole.SOURCE);
         return sourcePool;
     }
 
     private synchronized HikariDataSource targetPool() {
         checkOpen();
-        if (targetPool == null) targetPool = create(target, "migration-target");
+        if (targetPool == null) targetPool = create(target, "migration-target", EndpointRole.TARGET);
         return targetPool;
     }
 
@@ -49,14 +59,25 @@ public final class MigrationConnectionPools implements AutoCloseable, com.datami
         if (closed) throw new IllegalStateException("Migration connection pools are closed");
     }
 
-    private static HikariDataSource create(Endpoint endpoint, String name) {
+    private HikariDataSource create(Endpoint endpoint, String name, EndpointRole role) {
         HikariDataSource pool = new HikariDataSource();
         try {
             pool.setPoolName(name);
-            pool.setJdbcUrl(endpoint.jdbcUrl());
-            pool.setUsername(endpoint.username());
-            pool.setPassword(endpoint.password());
-            pool.setDriverClassName(endpoint.driverClassName());
+            if (endpoint.credentialsProvider() == null) {
+                pool.setJdbcUrl(endpoint.jdbcUrl());
+                pool.setUsername(endpoint.username());
+                pool.setPassword(endpoint.password());
+                pool.setDriverClassName(endpoint.driverClassName());
+            } else {
+                DatabaseCredentialsProvider provider;
+                try {
+                    provider = java.util.Objects.requireNonNull(providers.apply(endpoint.credentialsProvider()));
+                } catch (RuntimeException e) {
+                    throw new IllegalArgumentException("Cannot resolve credentials provider "
+                            + endpoint.credentialsProvider() + " for " + role);
+                }
+                pool.setDataSource(new CredentialsDataSource(endpoint, role, provider));
+            }
             pool.setMaximumPoolSize(endpoint.pool().maximumPoolSize());
             pool.setMinimumIdle(endpoint.pool().minimumIdle());
             pool.setConnectionTimeout(endpoint.pool().connectionTimeout().toMillis());

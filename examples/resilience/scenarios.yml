@@ -1,0 +1,6 @@
+# Load this file first, then the environment file; later files override earlier files.
+resilience:
+  scenario: SOURCE_OUTAGE
+  phase-timeout: 90s
+  trigger-task: customer
+  trigger-commit: 2

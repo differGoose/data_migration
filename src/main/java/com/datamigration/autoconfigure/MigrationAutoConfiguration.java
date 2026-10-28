@@ -42,9 +42,11 @@ public class MigrationAutoConfiguration {
     @Bean(destroyMethod = "close")
     @Lazy
     @ConditionalOnMissingBean
-    MigrationConnectionPools migrationConnectionPools(MigrationConfiguration configuration) {
+    MigrationConnectionPools migrationConnectionPools(MigrationConfiguration configuration,
+            org.springframework.beans.factory.BeanFactory beanFactory) {
         var properties = configuration.get();
-        return new MigrationConnectionPools(properties.source(), properties.target());
+        return new MigrationConnectionPools(properties.source(), properties.target(),
+                name -> beanFactory.getBean(name, com.datamigration.api.DatabaseCredentialsProvider.class));
     }
 
     @Bean

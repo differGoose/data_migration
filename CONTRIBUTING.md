@@ -28,4 +28,6 @@ Surefire 执行 UT，Failsafe 执行 *IT；JaCoCo 只统计 UT，行/分支覆�
 
 报告 Java/数据库/驱动版本、脱敏配置、期望结果、实际状态，以及可复现的合成数据。不要在公开 Issue/PR 上传数据库密码、token、原始业务行或含凭据的 JDBC URL。
 
-涉及提交结果未知、检查点、清表、并发锁、跳过额度或序列的变更，要验证故障恢复不会重复插入或丢失数据。真实 Oracle TCPS、PostgreSQL、IAM、ECS 验收与本地 H2 测试分开记录。当前 IAM 自动刷新尚未实现。
+涉及提交结果未知、检查点、清表、并发锁、跳过额度或序列的变更，要验证故障恢复不会重复插入或丢失数据。真实 Oracle TCPS、PostgreSQL、IAM、ECS 验收与本地 H2 测试分开记录。动态凭据扩展已提供，IAM token 生成由宿主提供器实现，参考 docs/database-credentials.md。
+
+测试目录和包内访问例外见 [测试索引](docs/test-index.md)。新增恢复场景请遵守 [故障恢复测试约定](docs/resilience-testing.md)，不得为 DEV 自动清理或创建业务/审计表。

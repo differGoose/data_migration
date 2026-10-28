@@ -12,6 +12,8 @@
 /migration-local.yaml
 /application-local.yml
 /application-local.yaml
+/resilience-local*.yml
+/resilience-local*.yaml
 /secrets/
 *.jks
 *.p12

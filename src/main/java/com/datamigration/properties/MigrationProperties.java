@@ -66,9 +66,19 @@ public record MigrationProperties(
     public record Endpoint(
             @NotBlank @Pattern(regexp = "^jdbc:.*", message = "must be a JDBC URL") String jdbcUrl,
             @NotBlank String username,
-            @NotNull String password,
+            String password,
             @NotBlank String driverClassName,
-            @DefaultValue @Valid Pool pool) {
+            @DefaultValue @Valid Pool pool,
+            String credentialsProvider) {
+        @org.springframework.boot.context.properties.bind.ConstructorBinding
+        public Endpoint {}
+        public Endpoint(String jdbcUrl, String username, String password, String driverClassName, Pool pool) {
+            this(jdbcUrl, username, password, driverClassName, pool, null);
+        }
+        @AssertTrue(message = "password is required unless credentials-provider is configured; provider name must not be blank")
+        public boolean isCredentialsValid() {
+            return credentialsProvider == null ? password != null : !credentialsProvider.isBlank();
+        }
         @Override public String toString() { return "Endpoint[redacted]"; }
     }
 

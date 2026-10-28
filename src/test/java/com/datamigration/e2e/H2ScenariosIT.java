@@ -52,7 +52,7 @@ class H2ScenariosIT {
     }
 
     private ConfigurableApplicationContext context(TcpDatabases databases,String job) {
-        return new SpringApplicationBuilder(H2MigrationIT.Host.class).properties(databases.properties()).run(
+        return new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties()).run(
                 "--spring.config.location=classpath:scenarios.yml", "--data-migration.job-id="+job,
                 "--data-migration.source.pool.maximum-pool-size=10", "--data-migration.target.pool.maximum-pool-size=10");
     }

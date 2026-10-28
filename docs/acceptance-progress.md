@@ -37,6 +37,10 @@ Java 17 适配替换了 List.getFirst、Duration.isPositive 和 ExecutorService 
 
 ## 最终交付核对
 
+2026-10-29 故障恢复与目录整理补充验收：JDK 21.0.2 执行 `mvn -B -ntp clean verify` 成功，190 项单元/组件测试通过，16 项集成测试中 15 项通过、1 项真实环境入口按默认配置跳过。UT 行覆盖 98.03%，分支覆盖 86.42%，保留原 85% 门槛。四个 H2 故障场景均在指定任务第 2 次业务提交边界触发，并完成续跑及再次执行校验；本地 DEV 契约验证凭据扩展与非空目标拒绝。另以配置文件列表和显式 SOURCE_OUTAGE 场景单独执行 ConfiguredResilienceIT，通过。证据为 target-resilience-completion-verify.log、target-resilience-entry-verify.log 和 target/resilience-reports。真实 Oracle/PostgreSQL 验收仍需实际环境。
+
+测试迁移后的包名、设施和入口见 [测试索引](test-index.md)；环境示例与执行方式见 [恢复测试指南](resilience-testing.md)。
+
 | 交付项 | 当前证据 |
 | --- | --- |
 | 单 Maven 模块普通 JAR、无 REST、方法始终提供 | pom.xml 的 packaging=jar；JAR 含 MigrationService 和 AutoConfiguration.imports，不含 BOOT-INF 或宿主 application.yml；自动配置测试验证默认不开连接池、方法可注入 |

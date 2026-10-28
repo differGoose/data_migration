@@ -6,6 +6,24 @@ Java 17 / Spring Boot 4.1.1 / JDBC / HikariCP 数据迁移组件，优先面向�
 
 **单模块、普通 JAR、Java 方法入口，不提供 REST API。** 已实现 JDBC 迁移引擎、持久化续传和双 H2 测试；完整验收进度见 [验收记录](docs/acceptance-progress.md)。真实 Oracle/PostgreSQL、IAM 和 ECS 尚未联调。
 
+## 从哪里开始读
+
+第一次使用，建议按下面顺序阅读；无需先理解检查点和锁的内部实现。
+
+| 你想做什么 | 对应文档 |
+| --- | --- |
+| 把组件放进自己的 Spring Boot，实际迁移一张表 | [宿主接入完整步骤](docs/getting-started.md) |
+| 理解 SQL 映射、三个批次参数、连接池及 job-id | [配置解释与例子](docs/configuration.md) |
+| 在本机准备 H2，查看源库与目标库 | [H2 本地演示](docs/h2-local.md) |
+| 接入项目自己的密码解密或 IAM | [数据库凭据扩展](docs/database-credentials.md) |
+| 判断部分成功、断网续跑、提交未知和重新全量迁移 | [运维与常见问题](docs/operations.md) |
+| 连接 Oracle TCPS、PostgreSQL TLS，或放进 ECS | [云端部署步骤](docs/cloud-deployment.md) |
+| 人为断网/杀宿主，验证恢复是否正确 | [恢复测试指南](docs/resilience-testing.md) |
+| 理解底层事务、范围规划和锁协议 | [架构说明](docs/architecture.md) |
+| 查测试位置及哪些内容已经验收 | [测试索引](docs/test-index.md)、[验收记录](docs/acceptance-progress.md) |
+
+整体流程是：**宿主引入 JAR → 人工准备目标表和审计表 → 填 YAML → 注入并调用 migrate() → 检查各表结果 → 必要时用原 job-id 续跑**。
+
 ## 使用方式
 
 宿主引入依赖后，自动获得 `MigrationService` Bean，无需额外组件扫描或启用注解。
@@ -171,16 +189,24 @@ mvn install
 
 Surefire 执行单元测试；Failsafe 执行 `*IT`，包括双 H2 TCP、10,000 行、TLS 正反例、断连和进程强制退出恢复。TLS 测试使用 JDK 自带 keytool 生成临时证书。JaCoCo 单独统计 Surefire 覆盖率，LINE 和 BRANCH 均须 >=85%，不使用 E2E 补足 UT 覆盖率；报告在 `target/site/jacoco-ut/index.html`。
 
-在 IDE 中直接运行 `src/test/java/com/datamigration/e2e/H2Demo.java` 的 `main` 或 `startDemoDatabases()`，即可启动两个独立 H2 TCP 服务并创建 10,000 条源数据。控制台打印随机端口和 JDBC 地址，测试账号为 sa/空密码，按 Enter 停止。文件保留在 target/h2-demo-*，只用于本地测试。参考 src/test/resources/e2e.yml 填写地址，IDE 必须使用 test classpath。此演示方法不会阻塞 mvn verify。
+在 IDE 中直接运行 `src/test/java/com/datamigration/demo/H2Demo.java` 的 `main` 或 `startDemoDatabases()`，即可启动两个独立 H2 TCP 服务并创建 10,000 条源数据。控制台打印随机端口和 JDBC 地址，测试账号为 sa/空密码，按 Enter 停止。文件保留在 target/h2-demo-*，只用于本地测试。参考 src/test/resources/e2e.yml 填写地址，IDE 必须使用 test classpath。此演示方法不会阻塞 mvn verify。
 
 目标业务表和审计表必须提前创建；引擎不自动执行 DDL。正式 [PostgreSQL 审计模板](src/main/resources/db/postgresql/migration-audit.sql) 和 [H2 模板](src/main/resources/db/h2/migration-audit.sql) 随 JAR 提供。审计表也承载执行锁记录，不可在迁移运行期间清空。
 
 实现细节见 [设计文档](docs/architecture.md)。框架锁只能协调使用同一个目标库、同一个审计表的本组件实例；不能阻止外部程序改表。建议只在一个宿主实例开启启动迁移。
 
-云端接入见 [Oracle TCPS / PostgreSQL TLS / IAM / ECS 说明](docs/cloud-deployment.md)。IAM 自动刷新尚未实现；ECS 示例交由宿主打包运行，不是本组件的独立 runner 模块。
+云端接入见 [Oracle TCPS / PostgreSQL TLS / IAM / ECS 说明](docs/cloud-deployment.md)。IAM token 由宿主提供器在新建物理连接时生成；真实 IAM 仍需联调。ECS 示例交由宿主打包运行，不是本组件的独立 runner 模块。
 
 ## 本地演示与贡献
 
 H2Demo 的启动、DBeaver 连接和迁移方法调用见 [H2 本地指南](docs/h2-local.md)。它只准备样例数据库，迁移需由宿主调用 `MigrationService.migrate()`，或执行已有 E2E 用例。
 
 提交范围、构建和报告缺陷的方法见 [CONTRIBUTING.md](CONTRIBUTING.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)。仓库只保存源码、合成测试数据的生成代码、配置模板和文档。真实数据库、日志、IDE 配置、密码和证书文件不提交。
+
+## 数据库凭据扩展
+
+源库和目标库支持通过 `credentials-provider` 指定宿主 Spring Bean，自定义密码解密、密钥服务读取或 AWS IAM token 生成。旧静态密码配置保持兼容，参见 [接入示例与生命周期说明](docs/database-credentials.md)。
+
+### 故障恢复测试与目录
+
+测试按 `unit`、`component`、`e2e`、`resilience`、`support`、`demo` 组织在 `src/test/java/com/datamigration` 下。见[逐类测试索引](docs/test-index.md)及[H2 / DEV 故障恢复指南](docs/resilience-testing.md)。默认 CI 只运行本地测试；真实 Oracle → PostgreSQL 需显式配置、选择单一场景并启用 `resilience-dev` profile。

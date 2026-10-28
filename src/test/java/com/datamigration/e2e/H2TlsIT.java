@@ -1,4 +1,5 @@
 package com.datamigration.e2e;
+import com.datamigration.support.*;
 
 import com.datamigration.api.MigrationService;
 import com.datamigration.support.TcpDatabases;
@@ -24,16 +25,16 @@ class H2TlsIT {
         System.setProperty("javax.net.ssl.trustStorePassword", "test-password");
         try (var databases = new TcpDatabases(directory.resolve("db"), true)) {
             databases.seed(10_000);
-            try (var context = new SpringApplicationBuilder(H2MigrationIT.Host.class).properties(databases.properties())
+            try (var context = new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties())
                     .run("--spring.config.location=classpath:e2e.yml")) {
                 assertThat(context.getBean(MigrationService.class).migrate().tables().get(0).committedRows()).isEqualTo(10_000);
             }
-            H2MigrationIT.assertEquivalent(databases);
+            MigrationAssertions.assertEquivalent(databases);
             String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
             Path log = directory.resolve("untrusted.log");
             Process process = new ProcessBuilder(javaTool("java"), "-Djavax.net.ssl.trustStore=" + wrong,
                     "-Djavax.net.ssl.trustStorePassword=test-password", "-cp", classpath,
-                    UntrustedClient.class.getName(), databases.sourceUrl()).redirectErrorStream(true)
+                    UntrustedTlsClient.class.getName(), databases.sourceUrl()).redirectErrorStream(true)
                     .redirectOutput(log.toFile()).start();
             try {
                 assertThat(process.waitFor(30, TimeUnit.SECONDS)).isTrue();
@@ -61,12 +62,5 @@ class H2TlsIT {
     private String javaTool(String name) {
         return Path.of(System.getProperty("java.home"), "bin",
                 name + (System.getProperty("os.name").startsWith("Windows") ? ".exe" : "")).toString();
-    }
-    public static final class UntrustedClient {
-        public static void main(String[] args) throws Exception {
-            try (var connection = java.sql.DriverManager.getConnection(args[0], "sa", "")) {
-                connection.createStatement().executeQuery("SELECT 1").close();
-            }
-        }
     }
 }

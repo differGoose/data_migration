@@ -2,6 +2,16 @@
 
 这是部署说明，不是云端验收报告。本地 H2 的 TLS 测试已覆盖受信任证书成功、不受信任证书拒绝；真实 Oracle/PostgreSQL 驱动、IAM 与 ECS 仍须使用 DEV 环境验证。不要用 H2 compatibility mode 代替这些验收。
 
+## 推荐接入顺序
+
+1. 先按 [宿主接入指南](getting-started.md)用普通配置跑通方法调用、目标建表和字段映射。
+2. 由 DBA 确认数据库服务名、证书身份、CA、账号权限与网络端口，再配置下面的 TLS 连接。
+3. 如果密码已经可用，继续使用静态密码；只有需要解密、密钥服务或 IAM 时才添加 [凭据提供器](database-credentials.md)。
+4. 在真实 DEV 小范围试跑并比对字段，再用 [恢复测试](resilience-testing.md)验证中断续跑。
+5. 最后将同一宿主打包到容器，配置网络、证书、环境变量与运行身份；本机可连接不代表容器网络已打通。
+
+“驱动依赖”“数据库登录账号”“TLS 信任”和“云端运行身份”是不同配置：添加 JDBC 依赖只让 Java 能识别协议，不会自动授予数据库权限或信任证书。报错时应分层核对。
+
 ## Oracle 源连接
 
 宿主引入 `com.oracle.database.jdbc:ojdbc11`，按数据库和驱动版本核对支持矩阵。源账号仅授予必要表的 SELECT 权限；不需要创建对象、更新表或读取源序列 NEXTVAL。
@@ -30,11 +40,7 @@ MIGRATION_TARGET_URL=jdbc:postgresql://postgres.example.internal:5432/dev?sslmod
 
 ## IAM：当前边界和接入方案
 
-当前默认连接池只实现 YAML 静态账号密码，**没有 IAM token 自动生成/刷新功能**。不能将一次生成的 token 写入 YAML 后宣称支持长期运行的 IAM 连接池。
-
-RDS IAM token 有效期为 15 分钟，创建新数据库连接时使用。见 [AWS RDS IAM 连接说明](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.Connecting.html)。由此，后续适配应在创建每个物理连接时获取有效 token，不能仅在应用启动时生成一次。已建立连接的生命周期与创建连接时的认证应分开测试。
-
-接入方式：宿主注册自定义 `MigrationEngine` Bean，内部仍使用 `JdbcMigrationEngine`，传入自定义 `ConnectionAccess`。该实现负责两个独立连接池、READ_COMMITTED/autoCommit=false、关闭生命周期；目标池底层连接工厂从 AWS SDK 默认凭据链获得 ECS task role 凭据，按 endpoint/region/username 生成 token，再建立开启 verify-full 的连接。`JdbcMigrationEngine` 的连接预算和 endpointIdentity 必须与配置一致。此扩展尚需实现及云端测试，不要求改动业务 INSERT/恢复算法。
+现已提供按端点选择的 DatabaseCredentialsProvider 扩展，每次创建物理连接时获取凭据。宿主负责 IAM token 生成与 AWS SDK 依赖，组件管理两个连接池。完整配置与 Bean 示例见 [自定义数据库凭据](database-credentials.md)。真实 IAM 仍需云端验收。
 
 ECS **task role** 用于应用的 AWS API 权限，**task execution role** 用于拉取镜像、日志及任务配置中的秘密注入；不要混用。依据 [AWS ECS IAM 角色说明](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-iam-roles.html) 配置最小权限，不在镜像中保存长期 access key。
 
@@ -48,7 +54,7 @@ ECS **task role** 用于应用的 AWS API 权限，**task execution role** 用�
 
 - 使用独立一次性任务，配置所需 CPU/内存、日志、task role、execution role 和证书只读挂载。
 - `SPRING_MAIN_WEB_APPLICATION_TYPE=none`、`DATA_MIGRATION_RUN_ON_STARTUP=true`；配置文件通过 `SPRING_CONFIG_IMPORT=file:/run/config/migration.yml` 导入。
-- 两端 URL、用户名和密码通过环境与 secret 注入，保持 `MIGRATION_*` 变量名与示例 YAML 一致。IAM 路径须先实现上述连接工厂。
+- 两端 URL、用户名和密码通过环境与 secret 注入，保持 `MIGRATION_*` 变量名与示例 YAML 一致。IAM 路径通过 credentials-provider 指定宿主提供器，可省略 password。
 - 固定 `DATA_MIGRATION_JOB_ID`，ECS 重试同一工作时保持不变；仅在明确全量重导时换新 job-id 并启用 CLEAR_AND_REIMPORT。
 - 网络须能解析并访问 Oracle DEV TCPS 和目标 PostgreSQL 端口；容器内不能使用本地 H2 示例的 localhost 地址。
 - 审计保存在目标库，容器重建不丢检查点；证书和密码不写入任务日志。
