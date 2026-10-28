@@ -24,7 +24,7 @@ class TransactionRecoveryTest {
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
             assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE job_id='job' AND state='SUCCEEDED'")).isZero();
             db.target("ALTER TABLE migration_audit DROP CONSTRAINT reject_progress");
-            assertThat(engine.execute(plan).tables().getFirst().committedRows()).isEqualTo(45);
+            assertThat(engine.execute(plan).tables().get(0).committedRows()).isEqualTo(45);
         }
     }
 
@@ -99,11 +99,11 @@ class TransactionRecoveryTest {
             try (var engine = db.engine(access)) {
                 if (fault == Fault.ROLLBACK_FAILED || fault == Fault.VERIFY_UNAVAILABLE) {
                     var failure = catchThrowableOfType(() -> engine.execute(plan), MigrationException.class);
-                    assertThat(failure.result().tables().getFirst().status()).isEqualTo(
+                    assertThat(failure.result().tables().get(0).status()).isEqualTo(
                             fault == Fault.VERIFY_UNAVAILABLE ? TableResult.Status.COMMIT_UNKNOWN : TableResult.Status.FAILED);
                     assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(fault == Fault.VERIFY_UNAVAILABLE ? 45 : 0);
                 } else {
-                    var result = engine.execute(plan).tables().getFirst();
+                    var result = engine.execute(plan).tables().get(0);
                     assertThat(result.committedRows()).isEqualTo(45);
                     assertThat(result.retries()).isEqualTo(fault == Fault.COMMIT_AFTER ? 0 : 1);
                 }
@@ -123,10 +123,10 @@ class TransactionRecoveryTest {
                     original.targetTable(), original.primaryKey(), 1, original.mode(), new SequenceSpec(true, "A_SEQ", "ID"));
             var plan = db.plan(task);
             var failure = catchThrowableOfType(() -> engine.execute(plan), MigrationException.class);
-            assertThat(failure.result().tables().getFirst().status()).isEqualTo(TableResult.Status.FINALIZATION_FAILED);
+            assertThat(failure.result().tables().get(0).status()).isEqualTo(TableResult.Status.FINALIZATION_FAILED);
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(12);
             db.target("CREATE SEQUENCE A_SEQ START WITH 1");
-            assertThat(engine.execute(plan).tables().getFirst().status()).isEqualTo(TableResult.Status.SUCCEEDED);
+            assertThat(engine.execute(plan).tables().get(0).status()).isEqualTo(TableResult.Status.SUCCEEDED);
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(12);
             assertThat(db.scalar("SELECT NEXT VALUE FOR A_SEQ")).isEqualTo(13);
         }

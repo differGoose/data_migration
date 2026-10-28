@@ -82,7 +82,7 @@ class H2RecoveryIT {
                         new JdbcMigrationEngine(restored, 6, 6, databases.sourceUrl()+"|"+databases.targetUrl(),
                                 new JdbcValueConverter())))
                     .run("--spring.config.location=classpath:recovery.yml")) {
-                assertThat(context.getBean(MigrationService.class).migrate().tables().getFirst().committedRows()).isEqualTo(10_000);
+                assertThat(context.getBean(MigrationService.class).migrate().tables().get(0).committedRows()).isEqualTo(10_000);
             }
             H2MigrationIT.assertEquivalent(databases);
         }

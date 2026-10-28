@@ -32,16 +32,16 @@ public final class SqlSupport {
     public static String query(TableTask task) {
         try {
             var parsed = CCJSqlParserUtil.parseStatements(task.selectSql()).getStatements();
-            if (parsed.size() != 1 || !(parsed.getFirst() instanceof Select))
+            if (parsed.size() != 1 || !(parsed.get(0) instanceof Select))
                 throw new IllegalArgumentException("Source SQL must be one SELECT");
             var tokens = tokens(task.selectSql());
-            if (!tokens.getFirst().equals("SELECT") || tokens.contains("INTO") || tokens.contains("FOR")
+            if (!tokens.get(0).equals("SELECT") || tokens.contains("INTO") || tokens.contains("FOR")
                     || tokens.contains("?") || tokens.contains("NEXTVAL") || tokens.contains("NEXT")
                     || tokens.contains("INSERT") || tokens.contains("UPDATE") || tokens.contains("DELETE")
                     || tokens.contains("MERGE") || tokens.contains("CALL"))
                 throw new IllegalArgumentException("Source SQL must be a non-locking SELECT without parameters or sequence advancement");
             var inserts = CCJSqlParserUtil.parseStatements(task.insertSql()).getStatements();
-            if (inserts.size() != 1 || !(inserts.getFirst() instanceof Insert insert)
+            if (inserts.size() != 1 || !(inserts.get(0) instanceof Insert insert)
                     || !insert.getTable().getFullyQualifiedName().equalsIgnoreCase(table(task.targetTable())))
                 throw new IllegalArgumentException("INSERT must address target-table");
             var writeTokens = tokens(task.insertSql());
@@ -55,7 +55,7 @@ public final class SqlSupport {
             if (writeTokens.stream().filter("?"::equals).count() != task.fields().size())
                 throw new IllegalArgumentException("INSERT parameter count differs from fields");
             task.primaryKey().forEach(SqlSupport::identifier);
-            return parsed.getFirst().toString();
+            return parsed.get(0).toString();
         } catch (IllegalArgumentException exception) {
             throw exception;
         } catch (Exception exception) {

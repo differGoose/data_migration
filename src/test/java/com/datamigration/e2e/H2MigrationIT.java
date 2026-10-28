@@ -23,7 +23,7 @@ class H2MigrationIT {
             try (var context = new SpringApplicationBuilder(Host.class).properties(databases.properties())
                     .run("--spring.config.location=classpath:e2e.yml")) {
                 var result = context.getBean(MigrationService.class).migrate();
-                assertThat(result.tables().getFirst().committedRows()).isEqualTo(10_000);
+                assertThat(result.tables().get(0).committedRows()).isEqualTo(10_000);
             }
             assertEquivalent(databases);
             try (var context = new SpringApplicationBuilder(Host.class).properties(databases.properties())

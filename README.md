@@ -1,6 +1,8 @@
 # data_migration
 
-Java 21 / Spring Boot 4.1.1 / JDBC / HikariCP 数据迁移组件，优先面向静态 Oracle 数据源 → PostgreSQL。
+Java 17 / Spring Boot 4.1.1 / JDBC / HikariCP 数据迁移组件，优先面向静态 Oracle 数据源 → PostgreSQL。
+
+最低运行版本为 Java 17，使用 `--release 17` 编译；已在 JDK 17.0.16 上通过完整本地验收。此前按 Java 21 编译的旧 JAR 需要重新构建安装，不能直接用于 JDK 17 宿主。CI 配置同时验证 Java 17 和 21。
 
 **单模块、普通 JAR、Java 方法入口，不提供 REST API。** 已实现 JDBC 迁移引擎、持久化续传和双 H2 测试；完整验收进度见 [验收记录](docs/acceptance-progress.md)。真实 Oracle/PostgreSQL、IAM 和 ECS 尚未联调。
 
@@ -156,10 +158,10 @@ data_migration/
 
 ## 构建与验收
 
-需要 JDK 21 和 Maven 3.9+。在项目根目录执行：
+需要 JDK 17 和 Maven 3.9+。在项目根目录执行：
 
 ```powershell
-# JAVA_HOME 指向本机 JDK 21 安装目录；先用 java -version 和 mvn -version 确认。
+# JAVA_HOME 指向本机 JDK 17 安装目录；先用 java -version 和 mvn -version 确认。
 mvn -B -ntp clean verify
 mvn install
 ```

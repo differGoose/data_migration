@@ -112,7 +112,7 @@ public record MigrationProperties(
         @AssertTrue(message = "retry backoff must be positive and max >= initial")
         public boolean isBackoffValid() {
             return retryInitialBackoff != null && retryMaxBackoff != null
-                    && retryInitialBackoff.isPositive()
+                    && retryInitialBackoff.compareTo(Duration.ZERO) > 0
                     && retryMaxBackoff.compareTo(retryInitialBackoff) >= 0;
         }
     }

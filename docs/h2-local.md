@@ -2,7 +2,7 @@
 
 ## 启动两个数据库
 
-在 IDE 中导入根目录 pom.xml，选择 JDK 21，加载 Maven 的 test 依赖。运行 `src/test/java/com/datamigration/e2e/H2Demo.java` 的 main 方法，或直接调用 `startDemoDatabases()`。
+在 IDE 中导入根目录 pom.xml，选择 JDK 17，加载 Maven 的 test 依赖。运行 `src/test/java/com/datamigration/e2e/H2Demo.java` 的 main 方法，或直接调用 `startDemoDatabases()`。
 
 该方法在 Java 进程内启动两个独立 H2 TCP 服务，数据库文件位于 `target/h2-demo-<时间戳>/`。源库创建 10,000 条 CUSTOMER 数据，以及含 3MB BLOB、空 BLOB、NULL、CLOB 的 DOCUMENTS 样例；目标库创建空业务表及 MIGRATION_AUDIT。数据均为程序生成的测试数据。
 

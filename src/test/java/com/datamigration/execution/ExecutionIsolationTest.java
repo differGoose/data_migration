@@ -11,7 +11,8 @@ import static org.assertj.core.api.Assertions.*;
 
 class ExecutionIsolationTest {
     @Test void closeCancelsInFlightWorkAndWaitsForRollbackBeforeReturning() throws Exception {
-        try (var db=new DatabaseFixture(); var callers=Executors.newSingleThreadExecutor()) {
+        var callers=Executors.newSingleThreadExecutor();
+        try (var db=new DatabaseFixture(); var callerScope=new ExecutorScope(callers)) {
             db.seed("A",250); db.seed("B",10); db.seed("C",10);
             CountDownLatch entered=new CountDownLatch(1), workerStopped=new CountDownLatch(1);
             var converter=new com.datamigration.conversion.JdbcValueConverter();
@@ -49,7 +50,7 @@ class ExecutionIsolationTest {
                 assertThatThrownBy(() -> engine.execute(db.plan(db.task("A")))).isInstanceOf(MigrationException.class);
                 assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
             }
-            assertThat(engine.execute(db.plan(db.task("A"))).tables().getFirst().committedRows()).isEqualTo(10);
+            assertThat(engine.execute(db.plan(db.task("A"))).tables().get(0).committedRows()).isEqualTo(10);
         }
     }
 
@@ -66,7 +67,8 @@ class ExecutionIsolationTest {
     }
 
     @Test void sameServiceRejectsOverlappingCallsAndClosedEngineCannotRestart() throws Exception {
-        try (var db=new DatabaseFixture(); var callers=Executors.newSingleThreadExecutor()) {
+        var callers=Executors.newSingleThreadExecutor();
+        try (var db=new DatabaseFixture(); var callerScope=new ExecutorScope(callers)) {
             db.seed("A",10);
             CountDownLatch entered=new CountDownLatch(1), release=new CountDownLatch(1);
             ConnectionAccess delayed=new ConnectionAccess() {
@@ -85,7 +87,7 @@ class ExecutionIsolationTest {
                 assertThat(entered.await(5,TimeUnit.SECONDS)).isTrue();
                 assertThatThrownBy(() -> engine.execute(db.plan(db.task("A")))).hasMessageContaining("already running");
                 release.countDown();
-                assertThat(first.get(15,TimeUnit.SECONDS).tables().getFirst().committedRows()).isEqualTo(10);
+                assertThat(first.get(15,TimeUnit.SECONDS).tables().get(0).committedRows()).isEqualTo(10);
             } finally { release.countDown(); engine.close(); }
             assertThatThrownBy(() -> engine.execute(db.plan(db.task("A")))).hasMessageContaining("closed");
         }

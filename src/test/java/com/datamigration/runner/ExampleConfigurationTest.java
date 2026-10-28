@@ -37,7 +37,7 @@ class ExampleConfigurationTest {
                 assertThat(context).hasNotFailed();
                 var properties = context.getBean(MigrationConfiguration.class).get();
                 assertThat(properties.source().username()).isEqualTo("source");
-                assertThat(properties.toPlan().tables().getFirst().fields())
+                assertThat(properties.toPlan().tables().get(0).fields())
                     .extracting(field -> field.targetJdbcType())
                     .containsExactly(JDBCType.BIGINT, JDBCType.VARCHAR, JDBCType.TIMESTAMP);
                 assertThat(properties.strategy().commitSize()).isEqualTo(2000);

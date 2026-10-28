@@ -45,8 +45,8 @@ class JdbcMigrationEngineTest {
         try (var db = new DatabaseFixture(); var engine = db.engine()) {
             db.seed("CUSTOMER", 235);
             var plan = db.plan(db.task("CUSTOMER"));
-            assertThat(engine.execute(plan).tables().getFirst().committedRows()).isEqualTo(235);
-            assertThat(engine.execute(plan).tables().getFirst().committedRows()).isEqualTo(235);
+            assertThat(engine.execute(plan).tables().get(0).committedRows()).isEqualTo(235);
+            assertThat(engine.execute(plan).tables().get(0).committedRows()).isEqualTo(235);
             assertThat(db.scalar("SELECT COUNT(*) FROM CUSTOMER")).isEqualTo(235);
             assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no>0 AND state='SUCCEEDED'")).isEqualTo(3);
         }
@@ -115,7 +115,7 @@ class JdbcMigrationEngineTest {
             db.target("ALTER TABLE A ADD CONSTRAINT bad_id CHECK (ID<>5 AND ID<>105)");
             var plan = db.plan("job", 2, db.task("A"));
             TableResult result;
-            try { result = engine.execute(plan).tables().getFirst(); }
+            try { result = engine.execute(plan).tables().get(0); }
             catch (MigrationException failure) { throw new AssertionError(failure.result()); }
             assertThat(result.committedRows()).isEqualTo(218);
             assertThat(result.skippedRows()).isEqualTo(2);

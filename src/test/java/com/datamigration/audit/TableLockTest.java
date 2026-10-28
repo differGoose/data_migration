@@ -1,6 +1,7 @@
 package com.datamigration.audit;
 
 import com.datamigration.support.DatabaseFixture;
+import com.datamigration.execution.ExecutorScope;
 import org.junit.jupiter.api.Test;
 import java.sql.SQLException;
 import java.util.concurrent.*;
@@ -8,9 +9,10 @@ import static org.assertj.core.api.Assertions.*;
 
 class TableLockTest {
     @Test void takeoverFencesStaleWorkersAndWaitsForTheirTransactions() throws Exception {
+        var executor = Executors.newSingleThreadExecutor();
         try (var db = new DatabaseFixture(); var control = db.openTargetConnection();
              var oldWorker = db.openTargetConnection(); var newControl = db.openTargetConnection();
-             var executor = Executors.newSingleThreadExecutor()) {
+             var executorScope = new ExecutorScope(executor)) {
             var old = TableLock.acquire(db,control,"migration_audit","PUBLIC.A");
             var batches = new CheckpointStore("migration_audit","job","A");
             batches.create(control,1,"PUBLIC.A","fingerprint",null,null,10);

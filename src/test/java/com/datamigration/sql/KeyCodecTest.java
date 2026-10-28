@@ -40,7 +40,7 @@ class KeyCodecTest {
             doReturn(value).when(result).getObject(eq(1),any(Class.class));
             var values=KeyCodec.read(result,1);
             PreparedStatement insert=mock(PreparedStatement.class);
-            KeyCodec.decode(KeyCodec.encode(values)).getFirst().bind(insert,1);
+            KeyCodec.decode(KeyCodec.encode(values)).get(0).bind(insert,1);
             verify(insert).setObject(1,value,type);
         }
         ResultSet result=mock(ResultSet.class);

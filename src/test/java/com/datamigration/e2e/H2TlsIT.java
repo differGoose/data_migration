@@ -26,7 +26,7 @@ class H2TlsIT {
             databases.seed(10_000);
             try (var context = new SpringApplicationBuilder(H2MigrationIT.Host.class).properties(databases.properties())
                     .run("--spring.config.location=classpath:e2e.yml")) {
-                assertThat(context.getBean(MigrationService.class).migrate().tables().getFirst().committedRows()).isEqualTo(10_000);
+                assertThat(context.getBean(MigrationService.class).migrate().tables().get(0).committedRows()).isEqualTo(10_000);
             }
             H2MigrationIT.assertEquivalent(databases);
             String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));

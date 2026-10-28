@@ -45,8 +45,9 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         try {
             validateBudget(plan);
             List<TableResult> results = new ArrayList<>();
-            try (ExecutorService executor = Executors.newFixedThreadPool(
-                    Math.min(plan.strategy().maxConcurrentTables(), plan.tables().size()), workerFactory())) {
+            ExecutorService executor = Executors.newFixedThreadPool(
+                    Math.min(plan.strategy().maxConcurrentTables(), plan.tables().size()), workerFactory());
+            try (var executorScope = new ExecutorScope(executor)) {
                 CompletionService<TableResult> completion = new ExecutorCompletionService<>(executor);
                 Iterator<TableTask> tasks = plan.tables().iterator();
                 int active = 0;
@@ -243,7 +244,8 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     private void keyed(MigrationPlan plan, TableTask task, String query, List<String> keys, Connection source,
                        Connection control, CheckpointStore store, TableLock lock, String fingerprint, String target) throws Exception {
         int window = Math.multiplyExact(task.workerCount(), 2);
-        try (ExecutorService workers = Executors.newFixedThreadPool(task.workerCount(), workerFactory())) {
+        ExecutorService workers = Executors.newFixedThreadPool(task.workerCount(), workerFactory());
+        try (var workerScope = new ExecutorScope(workers)) {
             while (true) {
                 checkRunning(lock);
                 List<Checkpoint> pending = store.pending(control, window);

@@ -8,6 +8,8 @@ AutoConfiguration.imports 注册自动配置。MigrationService 始终可注入�
 
 MigrationConnectionPools 延迟创建两个独立 Hikari 池，连接使用 READ_COMMITTED、autoCommit=false。Spring 关闭时销毁引擎和连接池；每次执行独立管理游标、语句、借用连接。单个引擎拒绝重叠 execute 调用。
 
+编译和最低运行版本为 Java 17。ExecutorScope 在离开作用域时 shutdown 并等待所有任务结束；等待被中断时 shutdownNow，继续等待资源清理完成，最后恢复调用线程的中断标志。该实现替代新版 JDK 的 ExecutorService.close，保持事务回滚和 Spring 关闭顺序。
+
 ```mermaid
 flowchart TD
     A[MigrationService.migrate] --> B[绑定校验与连接预算]

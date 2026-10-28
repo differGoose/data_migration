@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- 将最低运行和编译版本调整为 Java 17，Spring Boot 版本保持 4.1.1。
+- 替换 Java 21 集合 API 和线程池自动关闭，保留等待任务结束、取消及中断状态恢复语义。
+- 同步测试、文档、Java 17 Docker 示例；CI 增加 Java 17 / 21 验证矩阵。
+- 在真实 JDK 17.0.16 上通过 179 项 UT、10 项 E2E 和覆盖率门槛。
+
 ## 0.1.0-SNAPSHOT — 2026-10-28
 
 初始开发版本，尚未发布到 Maven Central。

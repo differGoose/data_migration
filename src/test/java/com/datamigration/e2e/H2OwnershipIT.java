@@ -3,6 +3,7 @@ package com.datamigration.e2e;
 import com.datamigration.api.*;
 import com.datamigration.conversion.JdbcValueConverter;
 import com.datamigration.execution.JdbcMigrationEngine;
+import com.datamigration.execution.ExecutorScope;
 import com.datamigration.jdbc.ConnectionAccess;
 import com.datamigration.support.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -23,8 +24,9 @@ class H2OwnershipIT {
 
     @ParameterizedTest @EnumSource(Pause.class)
     void newReimportSurvivesOldCoordinatorAfterGuardLoss(Pause point) throws Exception {
+        var callers=Executors.newFixedThreadPool(2);
         try (var databases=new TcpDatabases(directory.resolve("db"),false);
-             var callers=Executors.newFixedThreadPool(2)) {
+             var callerScope=new ExecutorScope(callers)) {
             databases.seed(10_000);
             DatabaseFixture.execute(databases.targetUrl(),"INSERT INTO CUSTOMER VALUES(99999,'old',1)");
             DatabaseFixture.execute(databases.targetUrl(),"CREATE SEQUENCE CUSTOMER_SEQ START WITH 1");

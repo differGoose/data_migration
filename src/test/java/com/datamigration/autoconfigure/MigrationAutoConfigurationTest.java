@@ -152,7 +152,7 @@ class MigrationAutoConfigurationTest {
         MigrationEngine engine = plan -> {
             calls.incrementAndGet();
             assertThat(plan.tables()).hasSize(1);
-            assertThat(plan.tables().getFirst().fields().getFirst().sourceColumn()).isEqualTo("CUSTOMER_ID");
+            assertThat(plan.tables().get(0).fields().get(0).sourceColumn()).isEqualTo("CUSTOMER_ID");
             return result();
         };
         configured().withBean(MigrationEngine.class, () -> engine).run(context -> {
@@ -205,7 +205,7 @@ class MigrationAutoConfigurationTest {
             var p = context.getBean(MigrationConfiguration.class).get();
             assertThat(p.toString()).isEqualTo("MigrationProperties[redacted]");
             assertThat(p.source().toString()).isEqualTo("Endpoint[redacted]");
-            assertThat(p.tables().getFirst().toString()).doesNotContain("SELECT", "INSERT");
+            assertThat(p.tables().get(0).toString()).doesNotContain("SELECT", "INSERT");
         });
     }
 

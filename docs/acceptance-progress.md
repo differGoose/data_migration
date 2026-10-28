@@ -29,9 +29,11 @@
 | H2 ALTER SEQUENCE 保留事务行锁且不可回滚 | DatabaseDialectTest.h2SequenceAlterRetainsExistingTransactionLocksButCannotBeRolledBack |
 | 一表失败后排队批次保持待恢复，其他表继续完成 | JdbcMigrationEngineTest.failureStopsQueuedBatchesOfThatTableButOtherTablesStillRun |
 
-2026-10-28 09:53 的 `mvn -B -ntp clean verify` 通过：**177 项 UT、10 项 E2E，失败/错误/跳过均为 0**。UT 行覆盖 **884/902（98.00%）**、分支 **617/716（86.17%）**。JaCoCo 仅使用 Surefire 数据，未借助 E2E 达到 85% 门槛。
+2026-10-28 10:58 的 `mvn -B -ntp clean verify` 通过：**179 项 UT、10 项 E2E，失败/错误/跳过均为 0**。UT 行覆盖 **899/917（98.04%）**、分支 **622/722（86.15%）**。JaCoCo 仅使用 Surefire 数据，未借助 E2E 达到 85% 门槛。
 
-环境：JDK 21.0.4，Maven 3.9.6，Spring Boot BOM 4.1.1，JUnit 5.13.4，H2 2.4.240。原始证据：target-clean-verify.log、target/surefire-reports、target/failsafe-reports、target/site/jacoco-ut/index.html。构建产物为 target/data_migration-0.1.0-SNAPSHOT.jar。
+环境：Amazon Corretto JDK 17.0.16，Maven 3.9.6，Spring Boot BOM 4.1.1，JUnit 5.13.4，H2 2.4.240。原始证据：jdk17-verify.log、target/surefire-reports、target/failsafe-reports、target/site/jacoco-ut/index.html。构建产物为 target/data_migration-0.1.0-SNAPSHOT.jar，javap 确认 class major version=61（Java 17）。
+
+Java 17 适配替换了 List.getFirst、Duration.isPositive 和 ExecutorService 的 try-with-resources；ExecutorScopeTest 新增正常等待与中断清理验证，原有关闭回滚、进程恢复、TLS 测试均使用真实 JDK 17 执行。CI 已配置 Java 17 / 21 矩阵，云端执行结果以 GitHub Actions 为准。
 
 ## 最终交付核对
 
