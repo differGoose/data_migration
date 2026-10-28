@@ -1,0 +1,37 @@
+**/target/
+.idea/
+*.iml
+.env
+*.log
+
+# Local settings and credentials (commit templates, not populated settings)
+.env.*
+!.env.example
+/.mvn/maven.config
+/migration-local.yml
+/migration-local.yaml
+/application-local.yml
+/application-local.yaml
+/secrets/
+*.jks
+*.p12
+*.pfx
+*.key
+*.pem
+*.keystore
+
+# H2 database files and generated build artifacts
+*.mv.db
+*.trace.db
+*.h2.db
+*.lock.db
+*.class
+*.jar
+*.war
+*.zip
+*.hprof
+
+# IDE and OS metadata
+.vscode/
+.DS_Store
+Thumbs.db

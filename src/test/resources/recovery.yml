@@ -1,0 +1,22 @@
+data-migration:
+  run-on-startup: false
+  strategy:
+    batch-size: 200
+    commit-size: 1000
+    max-concurrent-tables: 2
+    retry-initial-backoff: 10ms
+    retry-max-backoff: 20ms
+  tables:
+    - name: customer
+      target-table: CUSTOMER
+      primary-key: [ID]
+      worker-count: 1
+      select-sql: SELECT ID, NAME, AMOUNT FROM CUSTOMER ORDER BY ID
+      insert-sql: INSERT INTO CUSTOMER(ID, NAME, AMOUNT) VALUES (?, ?, ?)
+      fields:
+        - source-column: ID
+          target-jdbc-type: BIGINT
+        - source-column: NAME
+          target-jdbc-type: VARCHAR
+        - source-column: AMOUNT
+          target-jdbc-type: DECIMAL

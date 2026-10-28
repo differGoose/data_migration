@@ -1,0 +1,33 @@
+name: Maven verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Run unit tests, H2 E2E and coverage gates
+        run: mvn -B -ntp clean verify
+      - name: Upload verified JAR and coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: data_migration-build
+          path: |
+            target/data_migration-*.jar
+            target/site/jacoco-ut/
+          if-no-files-found: error
+          retention-days: 14

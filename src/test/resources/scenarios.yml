@@ -1,0 +1,58 @@
+data-migration:
+  run-on-startup: false
+  strategy:
+    fetch-size: 100
+    batch-size: 100
+    commit-size: 100
+    skip-limit: 2
+    max-concurrent-tables: 2
+    max-batch-bytes: 1MB
+    max-lob-size: 8MB
+    audit:
+      enabled: true
+      table-name: migration_audit
+  tables:
+    - name: customer
+      target-table: CUSTOMER
+      primary-key: []
+      worker-count: 1
+      mode: CLEAR_AND_REIMPORT
+      select-sql: SELECT ID,NAME,AMOUNT FROM CUSTOMER
+      insert-sql: INSERT INTO CUSTOMER (ID,NAME,AMOUNT) VALUES (?,?,?)
+      fields:
+        - source-column: ID
+          target-jdbc-type: BIGINT
+        - source-column: NAME
+          target-jdbc-type: VARCHAR
+        - source-column: AMOUNT
+          target-jdbc-type: DECIMAL
+    - name: documents
+      target-table: DOCUMENTS
+      primary-key: [ID]
+      worker-count: 1
+      mode: CLEAR_AND_REIMPORT
+      select-sql: SELECT ID,CONTENT,NOTES FROM DOCUMENTS
+      insert-sql: INSERT INTO DOCUMENTS VALUES (?,?,?)
+      fields:
+        - source-column: ID
+          target-jdbc-type: BIGINT
+        - source-column: CONTENT
+          target-jdbc-type: VARBINARY
+        - source-column: NOTES
+          target-jdbc-type: VARCHAR
+    - name: orders
+      target-table: ORDERS
+      primary-key: [TENANT,ID]
+      worker-count: 3
+      mode: CLEAR_AND_REIMPORT
+      select-sql: SELECT TENANT,ID FROM ORDERS ORDER BY TENANT,ID
+      insert-sql: INSERT INTO ORDERS VALUES (?,?)
+      sequence:
+        enabled: true
+        name: ORDER_SEQ
+        target-column: ID
+      fields:
+        - source-column: TENANT
+          target-jdbc-type: INTEGER
+        - source-column: ID
+          target-jdbc-type: BIGINT

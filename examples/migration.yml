@@ -1,0 +1,67 @@
+data-migration:
+  job-id: oracle-to-pg-demo
+  run-on-startup: false
+  source:
+    jdbc-url: ${MIGRATION_SOURCE_URL}
+    username: ${MIGRATION_SOURCE_USERNAME}
+    password: ${MIGRATION_SOURCE_PASSWORD}
+    driver-class-name: oracle.jdbc.OracleDriver
+    pool:
+      maximum-pool-size: 4
+      minimum-idle: 0
+      connection-timeout: 30s
+      idle-timeout: 10m
+      max-lifetime: 30m
+  target:
+    jdbc-url: ${MIGRATION_TARGET_URL}
+    username: ${MIGRATION_TARGET_USERNAME}
+    password: ${MIGRATION_TARGET_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    pool:
+      maximum-pool-size: 5
+      minimum-idle: 0
+      connection-timeout: 30s
+      idle-timeout: 10m
+      max-lifetime: 30m
+  strategy:
+    fetch-size: 1000
+    batch-size: 500
+    commit-size: 2000
+    skip-limit: 0
+    transient-retry-count: 3
+    retry-initial-backoff: 1s
+    retry-max-backoff: 10s
+    max-concurrent-tables: 4
+    max-batch-bytes: 16MB
+    max-lob-size: 32MB
+    audit:
+      enabled: true
+      table-name: migration_audit
+  tables:
+    - name: customer
+      target-table: public.customer
+      primary-key: [CUSTOMER_ID]
+      worker-count: 1
+      mode: APPEND_RESUME
+      sequence:
+        enabled: false
+        # Enable only for a pre-existing increment=1, non-cycling target sequence.
+        # name: public.customer_id_seq
+        # target-column: id
+      enabled: true
+      select-sql: |
+        SELECT ID AS CUSTOMER_ID,
+               NAME AS CUSTOMER_NAME,
+               CREATED_AT AS CREATED_AT
+        FROM LEGACY_CUSTOMER
+      insert-sql: |
+        INSERT INTO public.customer (id, name, created_at)
+        VALUES (?, ?, ?)
+      # List order is the JDBC parameter order (1-based).
+      fields:
+        - source-column: CUSTOMER_ID
+          target-jdbc-type: BIGINT
+        - source-column: CUSTOMER_NAME
+          target-jdbc-type: VARCHAR
+        - source-column: CREATED_AT
+          target-jdbc-type: TIMESTAMP
