@@ -1,8 +1,28 @@
 # 本地实施与验收记录
 
-以下早期记录为历史验收证据；连接配置和批量参数已进行破坏性改造，当前接入方式以 README 和 getting-started.md 为准。最新双版本验收记录位于本文顶部。
+以下早期记录为历史验收证据；连接配置和批量参数已进行破坏性改造，当前接入方式以 README 和 getting-started.md 为准。当前仅支持与验证 JDK 17；本文下方所有双版本、执行锁和指纹记录均为历史，不代表当前能力。
 
-## 当前改造验证（2026-10-29）
+## 单进程协调与审计简化（当前，2026-10-29）
+
+默认引擎使用JVM共享单许可，跨Runner、Spring Context及目标表的重叠调用立即失败。取消后等待工作线程及事务清理结束才释放许可，关闭空闲Runner不能释放其他执行者的许可。数据库执行锁、guard、执行令牌、fingerprint和端点身份计算均已删除；保留批次/汇总事务行锁、提交结果核实、有限重试和同job恢复。
+
+有键表预算为源/目标各W+1，无键为源1/目标2；真实限定大小的Hikari池在最低预算下完成迁移，低预算提前失败。新审计不产生内部锁记录，字段与连续ID/联合键范围示例见 [审计设计](audit.md)。使用者人工准备新版审计表，不提供旧检查点转换。
+
+本轮仅使用Amazon Corretto JDK 17.0.16执行 `mvn -B -ntp clean verify`，完整通过：183项单元/组件测试；19项集成测试中17项执行通过、2项真实配置入口默认跳过。UT行覆盖893/905（98.67%），分支618/718（86.07%），原行/分支各85%门槛均通过。日志为target-audit-final17.log，报告位于target/surefire-reports、target/failsafe-reports及target/site/jacoco-ut。
+
+保留外部DataSource E2E方法、配置类、main/Maven入口及四类故障场景；故障宿主结束后才启动恢复宿主。实际运行E2E main成功、同job再次执行以及缺失配置返回退出码1，启动前BeforeStartupDemo也成功；ECS宿主示例按release17编译。101个本地文档链接及PostgreSQL两份DDL一致性检查通过。CI固定JDK17并删除版本矩阵。
+
+上述接口及故障验收使用调用方准备的合成H2数据库，没有真实Oracle/PostgreSQL连接参数，因此不宣称真实数据库联调完成。以下均为历史记录，旧锁和指纹相关测试已被当前的全局互斥测试替代。
+
+## 外部DataSource真实E2E入口（历史）（2026-10-29）
+
+新增DatabaseE2E.run直接接收调用方DataSource及配置文件，main/ConfiguredDatabaseE2EIT从显式外部配置类取得标记Bean。测试本身不准备真实数据库，不额外要求空目标，job和模式交由正式Runner处理。外部配置故障路径覆盖四类故障、同job再次调用及非空目标的无键重导恢复；临时代理端口按真实upstream规范化身份，控制文件不复制校验SQL。
+
+Java17.0.16与Java21.0.2的clean verify均通过：187项单元/组件测试，22项集成测试中20项执行通过、2项显式真实配置入口默认跳过。UT行覆盖98.17%，分支覆盖85.83%，保留各85%门槛。证据为target-external-e2e-final17.log及target-external-e2e-final21.log。实际main的成功、重复调用及缺失宿主失败退出也通过调用方预备的H2服务器验证；这些是本地接口契约证据，不代表真实Oracle/PostgreSQL联调。
+
+执行方法、示例与Maven命令见 [真实数据库E2E指南](real-database-e2e.md)。
+
+## 宿主数据源改造验证（历史）（2026-10-29）
 
 宿主直接提供 DataSource，MigrationRunner 在不创建 Spring 容器的情况下执行；Spring 包装使用源/目标注解。每表只有 batch-size 行数参数，旧连接与启动配置不再接受，不承诺旧版未完成 job 的兼容。
 
@@ -43,7 +63,7 @@
 
 Java 17 适配替换了 List.getFirst、Duration.isPositive 和 ExecutorService 的 try-with-resources；ExecutorScopeTest 新增正常等待与中断清理验证，原有关闭回滚、进程恢复、TLS 测试均使用真实 JDK 17 执行。CI 已配置 Java 17 / 21 矩阵，云端执行结果以 GitHub Actions 为准。
 
-## 最终交付核对
+## 早期交付核对（历史）
 
 2026-10-29 故障恢复与目录整理补充验收：JDK 21.0.2 执行 `mvn -B -ntp clean verify` 成功，190 项单元/组件测试通过，16 项集成测试中 15 项通过、1 项真实环境入口按默认配置跳过。UT 行覆盖 98.03%，分支覆盖 86.42%，保留原 85% 门槛。四个 H2 故障场景均在指定任务第 2 次业务提交边界触发，并完成续跑及再次执行校验；本地 DEV 契约验证凭据扩展与非空目标拒绝。另以配置文件列表和显式 SOURCE_OUTAGE 场景单独执行 ConfiguredResilienceIT，通过。证据为 target-resilience-completion-verify.log、target-resilience-entry-verify.log 和 target/resilience-reports。真实 Oracle/PostgreSQL 验收仍需实际环境。
 

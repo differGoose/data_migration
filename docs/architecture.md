@@ -11,9 +11,6 @@
 | 事务块 | 有键表中最多 tables[].batch-size 条源记录的范围，成功时数据和检查点一起提交 |
 | 检查点 | 目标审计库中持久化的边界与状态，进程退出后仍能读取 |
 | 协调连接 | 负责规划范围、汇总和收尾的连接，与 worker 连接分开 |
-| guard | 独立持有目标表执行锁的连接，防止本组件的另一个执行者同时接管 |
-| 执行令牌 | 接管时更换的随机值，旧执行者继续写入前必须核实自己仍有所有权 |
-| 指纹 | 对关键迁移配置计算的摘要，避免用不同规则误续跑旧数据 |
 
 例如 2500 行、tables[].batch-size=1000 的单 worker 有键任务，通常规划三个事务块，分别处理 1000、1000、500 行。如果前两块成功、第三块失败，新宿主从第三块继续，而不是从最大已见 ID 猜测是否完成。实际实现采用有界窗口，避免先把全表键装进内存。
 
@@ -23,16 +20,16 @@
 
 MigrationRunner 接收宿主提供的两个 DataSource，使用 ConfigData 加载配置但不创建 Spring 容器。Spring 包装通过 AutoConfiguration.imports 自动发现，按源/目标标记选择宿主 DataSource，第一次调用绑定并缓存规则，不注册 ApplicationRunner。没有 REST 接口，不参与宿主业务事务。
 
-DataSourceConnections 只借用连接，设置 READ_COMMITTED、autoCommit=false，结束未完成事务后恢复宿主事务属性并归还；回滚失败时不会启用 autoCommit 以免意外提交。Runner/Spring 关闭只关闭引擎，数据源始终由宿主管理。身份摘要来自元数据 URL、用户名、catalog/schema，去除认证/连接选项，不依赖对象地址。单个 Runner 拒绝重叠调用。
+DataSourceConnections 只借用连接，设置 READ_COMMITTED、autoCommit=false，结束未完成事务后恢复宿主事务属性并归还；回滚失败时不会启用 autoCommit 以免意外提交。Runner/Spring 关闭只关闭引擎，数据源始终由宿主管理。不再读取端点元数据计算身份；恢复时实际端点与配置不变由调用方保证。
 
-编译和最低运行版本为 Java 17。ExecutorScope 在离开作用域时 shutdown 并等待所有任务结束；等待被中断时 shutdownNow，继续等待资源清理完成，最后恢复调用线程的中断标志。该实现替代新版 JDK 的 ExecutorService.close，保持事务回滚和 Spring 关闭顺序。
+仅支持和验证 JDK 17。ExecutorScope 在离开作用域时 shutdown 并等待所有任务结束；等待被中断时 shutdownNow，继续等待资源清理完成，最后恢复调用线程的中断标志。该实现替代新版 JDK 的 ExecutorService.close，保持事务回滚和 Spring 关闭顺序。
 
 ```mermaid
 flowchart TD
     A[MigrationService.migrate] --> B[绑定校验与连接预算]
-    B --> C[有界表调度]
-    C --> D[获取目标表锁与执行令牌]
-    D --> E[检查配置指纹和预检]
+    B --> C[tryAcquire JVM共享许可]
+    C --> D[有界表调度]
+    D --> E[SQL及映射预检]
     E --> F{有唯一键?}
     F -->|是| G[分页规划固定键范围]
     G --> H[有界批次并发]
@@ -56,9 +53,9 @@ YAML 是受信任管理员配置。JSqlParser 验证单个 SELECT 和目标 INSE
 
 协调线程按键的字典序规划 `(lower, upper]` 范围，联合键生成逐项比较谓词并使用 PreparedStatement 绑定。规划窗口最多 worker-count × 2 个事务块，每块最多 tables[].batch-size 条源记录；规划持久化后才能执行。不会把全表键或数据加载到内存。
 
-每个 worker 独立使用源、目标连接，在目标事务中先锁定自己的批次记录，核实执行者令牌，流式读取并写入该范围，再锁定表汇总行累计计数、检查 skip-limit，最终将成功检查点和数据一起提交。不同批次即使乱序完成也不会丢失缺口。
+每个 worker 独立使用源、目标连接，在目标事务中先锁定自己的批次记录，流式读取并写入该范围，再锁定表汇总行累计计数、检查 skip-limit，最终将成功检查点和数据一起提交。不同批次即使乱序完成也不会丢失缺口。
 
-重启保持同一 job-id 和任务名，读取未成功的已规划批次，之后继续规划。指纹包括源/目标身份、SQL、字段、主键、模式、序列配置、tables[].batch-size、skip-limit、max-lob-size；性能参数如 worker-count 可以调整。成功任务返回已有结果。runId 是本次 API 调用标识，持久化恢复身份使用 job-id。
+重启保持同一 job-id 和任务名，读取未成功的已规划批次，之后继续规划。配置、实际数据源和源数据范围必须保持不变，不计算或比较配置摘要。成功任务返回已有结果。runId 是本次 API 调用标识，持久化恢复身份使用 job-id。
 
 ## 无键表与重导
 
@@ -76,17 +73,19 @@ YAML 是受信任管理员配置。JSqlParser 验证单个 SELECT 和目标 INSE
 
 序列只在数据提交完成之后校准，目标 ID 最大值必须可精确表示为 BIGINT；仅支持步长 1、非循环命名序列，已有水位更高时保持不变。H2 ALTER SEQUENCE 和 PostgreSQL setval 的非事务性效果独立处理，失败标记 FINALIZATION_FAILED；相同任务重试跳过数据阶段，再执行幂等收尾。空表无需推进。此机制不复制源数据库序列缓存状态。
 
-## 表锁与旧执行者隔离
+## JVM 执行协调与事务行锁
 
-审计表中的保留 job-id `__table_lock__` 保存规范化目标表的锁记录。独立 guard 连接持有 batch_no=0 的 FOR UPDATE NOWAIT 行锁；新的执行者更新 batch_no=1 的随机令牌，然后分别等待该目标表已有协调事务、批次事务排空，再开始清除或恢复。两次排空使用独立事务，避免与 worker 的“批次行锁 → 汇总行锁”顺序形成死锁。
+默认 JdbcMigrationEngine 公共 execute 入口使用 static、单许可 Semaphore.tryAcquire。已有迁移执行时，不论 Runner、Spring Context 或目标表是否不同，重叠调用都立即失败，且拒绝前不借连接。单个 Runner / 引擎也禁止自身重入。自定义 MigrationEngine 由宿主负责自己的执行协调。
 
-worker 必须先获取自身批次锁，再读取令牌。旧 guard 丢失后，旧 worker 要么已持有批次锁，新执行者等待其事务结束；要么晚于令牌更换拿到锁，令牌检查阻止其写入。此约定依赖 READ_COMMITTED 和所有执行者共享同一审计表。普通业务程序不参与该协议，因此仍需停写。
+许可属于实际执行调用；close 只请求取消并等待清理，不释放许可。成功、异常、中断及取消均经 ExecutorScope 等待所有表和 worker 退出、连接事务结束后，最后在 execute 的 finally 归还许可。关闭未执行的 Runner 不影响正在运行的迁移。
 
-协调线程在准备/清除、范围规划、汇总和序列收尾事务中先锁定表汇总行，再核实令牌。序列收尾将行锁保留到最终状态提交；H2 ALTER SEQUENCE 不隐式提交当前事务，但序列变更不随回滚撤销，这一行为已有真实 H2 锁测试。[H2 命令文档](https://h2database.com/html/commands.html#alter_sequence)
+该内存机制不协调不同进程。部署和运维必须确保旧迁移进程已结束再启动恢复进程，也应避免在同一进程用隔离的组件类加载器重复加载迁移引擎。不提供跨进程接管、租约或 fencing。测试不再模拟并行旧执行者接管。
+
+执行协调不占数据库连接；有键表 W 个 worker 需要源 W+1、目标 W+1，无键表需要源1、目标2。批次行锁与汇总行锁仍保留，防止表内并发计数、跳过额度及提交结果核实出现竞态；这些锁随事务释放，不生成单独锁记录。
 
 ## 审计与内存边界
 
-审计只使用一个预建表，batch_no=0 保存表汇总，正数记录批次；保留任务保存锁。字段包含边界、配置指纹、预期行数、已提交/跳过/处理行数、重试次数、准备/规划/数据完成标志、状态、开始与更新时间、脱敏错误类别。DDL 位于 src/main/resources/db，运行引擎不自动建表。
+审计只使用一个预建表，batch_no=0 保存表汇总，正数记录批次。不生成内部锁记录。字段包含边界、预期行数、已提交/跳过/处理行数、重试次数、准备/规划/数据完成标志、状态、开始与更新时间、脱敏错误类别。DDL 位于 src/main/resources/db，运行引擎不自动建表。完整字段与边界示例见 [审计设计](audit.md)。
 
 错误结果只暴露分类、SQLState 和厂商错误码，不打印密码、完整 SQL、绑定值或行内容。审计错误不能伪装为业务成功。审计历史和检查点可能包含键值，仍需数据库权限与保留策略保护。
 

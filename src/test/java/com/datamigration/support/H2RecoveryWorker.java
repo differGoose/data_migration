@@ -59,7 +59,7 @@ public final class H2RecoveryWorker {
                                     }
                                 };
                                 try (var engine=new JdbcMigrationEngine(access,4,4,
-                                        HostDataSources.identity(pools),new JdbcValueConverter())) {
+                                        new JdbcValueConverter())) {
                                     return engine.execute(config.toPlan());
                                 }
                             }))

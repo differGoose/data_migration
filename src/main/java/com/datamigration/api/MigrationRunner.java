@@ -7,7 +7,7 @@ import com.datamigration.properties.MigrationConfiguration;
 import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
 import org.springframework.core.env.*;
 import javax.sql.DataSource;
-import java.sql.SQLException;
+
 import java.util.*;
 
 /** A synchronous migration session. Creates no Spring context and never closes host DataSources. */
@@ -42,13 +42,13 @@ public final class MigrationRunner implements MigrationService, AutoCloseable {
                 if (closed) throw new IllegalStateException("Migration runner is closed");
                 if (engine == null) {
                     // Validate budgets before opening any connection.
-                    var candidate = new JdbcMigrationEngine(connections, sourceCapacity, targetCapacity, "", converter);
+                    var candidate = new JdbcMigrationEngine(connections, sourceCapacity, targetCapacity, converter);
                     candidate.validateBudget(plan);
-                    engine = new JdbcMigrationEngine(connections, sourceCapacity, targetCapacity, connections.identity(), converter);
+                    engine = candidate;
                 }
             }
             return engine.execute(plan);
-        } catch (SQLException failure) { throw new IllegalStateException("Cannot initialize migration endpoints"); }
+        }
         finally { synchronized (this) { running = false; notifyAll(); } }
     }
 

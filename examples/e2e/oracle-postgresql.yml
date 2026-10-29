@@ -1,0 +1,32 @@
+# Copy to e2e-local.yml. Your class provides two usable, annotated DataSources.
+# No JDBC connection or credential configuration belongs to data-migration or e2e.
+data-migration:
+  job-id: ${E2E_JOB_ID}
+  strategy:
+    max-concurrent-tables: 1
+    skip-limit: 0
+    audit:
+      table-name: MIGRATION_TEST.MIGRATION_AUDIT
+  tables:
+    - name: customer
+      batch-size: 500
+      worker-count: 1
+      target-table: MIGRATION_TEST.CUSTOMER_COPY
+      primary-key: [ID]
+      mode: APPEND_RESUME
+      select-sql: SELECT ID, NAME, AMOUNT FROM BUSINESS.CUSTOMER WHERE ID BETWEEN ${E2E_ID_MIN} AND ${E2E_ID_MAX} ORDER BY ID
+      insert-sql: INSERT INTO MIGRATION_TEST.CUSTOMER_COPY(ID, NAME, AMOUNT) VALUES (?, ?, ?)
+      fields:
+        - {source-column: ID, target-jdbc-type: BIGINT}
+        - {source-column: NAME, target-jdbc-type: VARCHAR}
+        - {source-column: AMOUNT, target-jdbc-type: DECIMAL}
+e2e:
+  scenario: MIGRATION
+  phase-timeout: 180s
+  report-directory: target/e2e-reports
+  # Used by main/Maven only; direct Java method callers can remove this entry.
+  configuration-classes: ['${E2E_DATASOURCE_CONFIG_CLASS}']
+  validation:
+    customer:
+      source-sql: SELECT ID, NAME, AMOUNT FROM BUSINESS.CUSTOMER WHERE ID BETWEEN ${E2E_ID_MIN} AND ${E2E_ID_MAX} ORDER BY ID
+      target-sql: SELECT ID, NAME, AMOUNT FROM MIGRATION_TEST.CUSTOMER_COPY WHERE ID BETWEEN ${E2E_ID_MIN} AND ${E2E_ID_MAX} ORDER BY ID

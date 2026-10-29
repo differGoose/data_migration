@@ -1,6 +1,6 @@
 # H2 本地演示
 
-本仓库只使用合成数据，不访问真实数据库。IDE 导入 Maven，选择 JDK17/21，使用 test classpath。
+本仓库只使用合成数据，不访问真实数据库。IDE 导入 Maven，选择 JDK17，使用 test classpath。
 
 ## 方式一：直接看“迁移完成后才启动宿主”
 

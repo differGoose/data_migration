@@ -1,6 +1,6 @@
 # 贡献与提交约定
 
-需要 JDK 17（含 keytool）和 Maven 3.9+。本项目为单模块普通 JAR，包名 com.datamigration，Maven 坐标 com.datamigration:data_migration。
+仅支持和验证 JDK 17，需要 JDK 17（含 keytool）和 Maven 3.9+。本项目为单模块普通 JAR，包名 com.datamigration，Maven 坐标 com.datamigration:data_migration。
 
 ## 本地检查
 

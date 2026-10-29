@@ -1,59 +1,21 @@
-# 可切换环境的故障恢复测试
+# 故障恢复测试
 
-默认 `mvn -B -ntp clean verify` 只运行本地测试。`ConfiguredResilienceIT` 没有 `resilience.config` 时跳过，Oracle/PostgreSQL 驱动只由 `resilience-dev` profile 引入。真实 DEV 验收需操作者提供连接配置、稳定源数据范围和已建好的专用目标表/审计表。
+推荐新入口见 [真实DataSource E2E](real-database-e2e.md)：普通迁移与四类故障共用e2e配置，数据源由调用方提供。以下是原resilience入口的本地用法。
 
-## 统一入口与配置覆盖
+默认mvn clean verify只运行本地H2设施；真实数据库显式启用，数据库对象由使用者提前准备。源数据必须稳定。测试不额外建表、清表或造真实业务数据，正式迁移模式自身的行为不受修改。
 
-在仓库根目录执行；PowerShell 下保留参数引号：
-
-```sh
+```powershell
 mvn -B -ntp verify "-Dit.test=ConfiguredResilienceIT" "-Dresilience.config=file:examples/resilience/scenarios.yml,file:examples/resilience/h2.yml" "-Dresilience.scenario=SOURCE_OUTAGE"
 ```
 
-`resilience.config` 是 Spring 配置位置的逗号分隔列表，后加载文件覆盖前面的同名配置；入口的 `resilience.scenario` 覆盖 YAML 中的场景。Spring 的列表是**整体替换**，不是按下标或任务名合并：覆盖 `data-migration.tables`、`fields` 或 `resilience.configuration-classes` 时必须写出完整列表。`ResilienceConfigurationTest` 验证这些语义。
+本地H2 fixture自己准备独立数据库；真实环境可使用配置的外部源/目标标记Bean，按[旧DEV模板](../examples/resilience/oracle-postgresql.yml)显式配置。更推荐e2e新模板，不需要把连接配置交给组件。
 
-公共配置在 `examples/resilience/scenarios.yml`，H2 与 DEV 示例分别在 `h2.yml` 和 `oracle-postgresql.yml`。`data-migration` 只负责 SQL、表映射和策略，连接由测试宿主创建 DataSource；`resilience` 独立描述环境、场景、超时、代理、触发点和校验查询。
+父进程持有源、目标TCP代理，关闭已有转发连接并拒绝新连接；宿主在子JVM执行。业务SQL精确匹配并在提交边界与父进程握手。网络恢复后以同job/config重启Runner，最后再次执行核对数据和审计未累计。
 
-可选场景：
+不要求新job空目标，不强制APPEND_RESUME、有键或零跳过额度。触发任务单worker用于确定故障顺序。无键表提交前崩溃也可恢复整表事务。新job冲突、同job完成、显式重导均由正式引擎处理；测试失败保留现场。
 
-| 场景 | 故障动作 |
-| --- | --- |
-| `SOURCE_OUTAGE` | 指定业务提交后，关闭源端已有代理连接并拒绝新连接 |
-| `TARGET_OUTAGE` | 指定业务提交后，关闭目标端已有代理连接并拒绝新连接 |
-| `APP_BEFORE_COMMIT` | 指定业务提交前，强制结束宿主 JVM |
-| `APP_AFTER_COMMIT` | 指定业务提交成功后，强制结束宿主 JVM |
+源验证SQL表达预期最终子集，跳过额度>0时可排除预期坏数据；完整迁移源数量另外用于核对committed+skipped。汇总与批次审计合计一致，重复执行前后的目标摘要及批次/计数一致。崩溃前后对比触发任务已经提交的目标快照，不依赖“目标最初为空”的假设。
 
-`trigger-task` 是启用任务的 `name`；`trigger-commit` 从 1 开始，按该任务的业务提交计数，不含审计提交。触发任务必须 `worker-count: 1`，避免并发提交顺序不确定；数据量必须大于触发提交批次乘以 触发表的 `batch-size`。公共示例在第 2 次提交触发，四个 H2 场景均验证已有部分结果的恢复。
+每轮保存脱敏manifest/result；控制文件和子进程日志仅供本地诊断。已有完成任务不会为了制造故障换新job或清目标，报告会如实标记faultTriggered=false。详细字段、超时和路由方式见新版指南。
 
-父进程持有两个 TCP 代理，宿主在独立 JVM 执行。JDBC 装饰器按配置生成的完整 `insert-sql` 匹配已执行的业务写入，利用本地控制目录中的 `ready` / `release` 文件握手，父进程确认故障注入后才允许继续。无需固定时间等待或固定业务表名。每个阶段受 `phase-timeout` 约束；超时会终止子进程。数据库故障必须导致本轮迁移失败，再恢复代理并启动新的宿主 JVM；没有为迁移引擎增加无限重试或自动恢复。
-
-## DEV 准备与执行
-
-1. 将 `examples/resilience/oracle-postgresql.yml` 复制为根目录下被 Git 忽略的 `resilience-local-dev.yml`，替换业务 SQL、表名、字段映射和校验 SQL。源查询必须是测试期间不变的范围，校验查询字段顺序与映射一致，并按唯一键稳定排序。
-2. 人工创建专用目标表和审计表，审计结构参照项目的审计建表脚本。测试框架不会在 DEV 建表、造数、清表、删除数据或修改源数据。每个新场景的专用目标表必须为空，且该 `job-id` 不应已有任务汇总；状态不符立即停止，保留现场。
-3. 设置示例引用的 `DEV_ORACLE_*`、`DEV_PG_*`、`DEV_ID_MIN`、`DEV_ID_MAX` 和 `RESILIENCE_JOB_ID` 环境变量。不同独立场景必须使用不同 `RESILIENCE_JOB_ID`，不要在 ID 中放秘密。
-4. 显式选择一次一个场景运行：
-
-```sh
-mvn -B -ntp -Presilience-dev verify "-Dit.test=ConfiguredResilienceIT" "-Dresilience.config=file:examples/resilience/scenarios.yml,file:resilience-local-dev.yml" "-Dresilience.scenario=TARGET_OUTAGE"
-```
-
-每次调用自动执行故障、恢复、再次执行三个阶段，共用同一个 job-id、代理端口和迁移配置。故障阶段之后允许本轮部分结果，续跑与再次执行不要求目标为空。重新调用入口被视为**新的一轮**，不会接管已有非空目标；父进程自身中断后应保留现场，由操作者评估并使用原配置恢复，不能直接当作新场景重复执行。
-
-DEV 验收前应配置 JDBC 驱动连接/读取超时，避免父进程预检的连接建立无限等待；`phase-timeout` 约束子进程及校验查询，不替代驱动的网络超时。源账号应只有读取权限，目标账号限定在人工准备的测试对象上。
-
-## 动态凭据与 TLS
-
-宿主配置类在父进程及全部子进程注册，放入 `resilience.configuration-classes`（完整类名、在 test classpath 中）。它应提供两个带 `@MigrationSource(capacity=...)` / `@MigrationTarget(capacity=...)` 的 DataSource Bean，自行处理解密或 IAM。Bean 建议 @Lazy，以便预读场景时不抢先解析尚未分配的代理端口。组件本身不识别连接密码或凭据提供器。
-
-仓库的 `HostDataSources` 是测试宿主设施，提供默认 Hikari 数据源并在关闭测试上下文时销毁。DEV 示例中的 host-databases 节是该测试宿主的配置，不是迁移组件配置；使用自定义数据源配置类时删除默认 host-databases 节，避免重复标记。测试宿主默认容量和池大小均为10；自定义宿主按自己的真实容量声明。源/目标 JDBC URL 必须经过父代理的 `${resilience.source-proxy.port}` / `${resilience.target-proxy.port}`。完整职责见 [宿主数据源](database-credentials.md)。
-
-TCP 代理原样转发字节，TLS 仍端到端验证。PostgreSQL `verify-full` 或 Oracle TCPS 使用的证书主机名必须解析到本地代理，代理 upstream 则必须独立解析到真实服务器；不要把 upstream 也解析回本机形成循环。IAM token 应按真实服务端主机和端口签发，不能使用临时代理端口签发。Oracle RAC 重定向、多地址故障转移等可能绕开代理的配置不适合该测试；预检要求两端都实际经过代理。
-
-## 验收与报告
-
-运行目录在 `target/resilience-reports/`。`manifest.properties` 用白名单保存运行 ID、job-id、场景、触发点、代理端口及提交大小，不输出 URL、密码、SQL 或业务行。`result.properties` 标记最终结果；`fault.log`、`resume.log`、`repeat.log` 和 `runtime.properties` 属于本地诊断文件，不应提交或公开分享。
-
-验收包括：故障已触发且本轮未完成、宿主崩溃的提交前后行数边界、源数据摘要未改变、恢复后目标行数及字段摘要与源一致、汇总和成功批次审计合计一致，以及再次执行保持数据/审计合计不变。数据摘要按映射类型归一化并流式计算，不保存业务数据。
-
-`DevHarnessContractIT` 使用人工预备的本地 H2 模拟 DEV 路径，验证宿主 DataSource Bean、非空目标拒绝及完整续跑；它不代表真实 Oracle/PostgreSQL、IAM 或 TCPS 已通过验收。
+仅支持 JDK 17。父进程先确认故障宿主 JVM 结束，再启动恢复宿主；任意时刻只运行一个迁移进程。新版不包含数据库执行锁、所有权令牌或跨进程接管测试。恢复保持原配置、实际数据源和源范围不变；事务检查点和数据原子提交保证仍保留。

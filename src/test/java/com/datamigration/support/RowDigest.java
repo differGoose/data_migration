@@ -15,11 +15,11 @@ public record RowDigest(long rows, String sha256) {
                                  int timeoutSeconds) throws Exception {
         // Reuse the production SELECT policy, including rejecting multi-statement/mutating queries.
         com.datamigration.sql.SqlSupport.query(new TableTask(task.name(), sql, task.insertSql(), task.fields(),
-                task.targetTable(), task.primaryKey(), task.workerCount(), task.mode(), task.sequence(), 100));
+                task.targetTable(), task.primaryKey(), task.workerCount(), task.mode(), task.sequence(), task.batchSize()));
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long count = 0;
         try (var statement = connection.createStatement()) {
-            statement.setFetchSize(500); statement.setQueryTimeout(timeoutSeconds);
+            statement.setFetchSize(task.batchSize()); statement.setQueryTimeout(timeoutSeconds);
             try (var rows = statement.executeQuery(sql)) {
                 if (rows.getMetaData().getColumnCount() != task.fields().size())
                     throw new IllegalArgumentException("Validation query column count must match fields");

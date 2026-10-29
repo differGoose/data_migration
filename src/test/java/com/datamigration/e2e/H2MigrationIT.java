@@ -24,7 +24,7 @@ class H2MigrationIT {
             MigrationAssertions.assertEquivalent(databases);
             try (var context = new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties())
                     .run("--spring.config.location=classpath:e2e.yml")) {
-                assertThat(context.getBean(DataSourceConnections.class)).isNotNull();
+                context.getBean(MigrationService.class).migrate();
             }
             MigrationAssertions.assertEquivalent(databases);
         }

@@ -4,7 +4,6 @@ CREATE TABLE migration_audit (
     task_name VARCHAR(200) NOT NULL,
     batch_no BIGINT NOT NULL,
     target_table VARCHAR(300) NOT NULL,
-    fingerprint VARCHAR(64) NOT NULL,
     state VARCHAR(32) NOT NULL,
     lower_key TEXT,
     upper_key TEXT,

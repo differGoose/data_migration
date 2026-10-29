@@ -12,6 +12,7 @@
 | 自定义解密和 IAM 数据源 | [宿主凭据与数据源](docs/database-credentials.md) |
 | 查询进度、失败续跑、重新全量迁移 | [运维指南](docs/operations.md) |
 | TLS 和 ECS 接入 | [云端指南](docs/cloud-deployment.md) |
+| 把真实DataSource直接交给E2E，或通过配置main/Maven执行 | [真实数据库E2E](docs/real-database-e2e.md) |
 | 模拟断网和宿主崩溃 | [恢复测试](docs/resilience-testing.md) |
 | 实现原理与测试位置 | [架构](docs/architecture.md)、[测试索引](docs/test-index.md) |
 
@@ -38,11 +39,13 @@ public static void main(String[] args) {
 
 YAML 只描述迁移工作，完整例子见 [migration.yml](examples/migration.yml)。每张表使用独立 `tables[].batch-size`，默认 1000：有键表按该数量划分事务块、设置 fetch 提示及 JDBC batch 上限，单次调用持续迁移至完成。无键表仍为整表事务。
 
+同一 JVM 的默认引擎共享一个内存许可，任何 Runner / Spring Context 的迁移重叠调用都会立即抛出 IllegalStateException。迁移内部仍支持多表和批次并发。许可在事务和工作线程清理完毕后释放；部署方必须保证不同进程不会同时迁移。
+
 ## 重复调用与恢复
 
-同一 job-id 表示同一轮工作，其中各表以 name 区分。重复调用会跳过成功任务，继续未完成批次，或重试未完成收尾；不是定时增量同步。源数据在迁移及恢复期间保持不变。修改关键映射、每表批量或端点身份时，配置指纹不匹配会阻止误续跑。
+同一 job-id 表示同一轮工作，其中各表以 name 区分。重复调用会跳过成功任务，继续未完成批次，或重试未完成收尾；不是定时增量同步。源数据在迁移及恢复期间保持不变。恢复必须保持配置、数据源和源数据范围不变；组件不计算配置摘要，不检测配置漂移。
 
-目标业务表、审计表及所需序列必须人工创建。默认 APPEND_RESUME 不清理目标、不自动 upsert；CLEAR_AND_REIMPORT 显式允许删除整张目标表。审计 SQL：[PostgreSQL](src/main/resources/db/postgresql/migration-audit.sql)、[H2](src/main/resources/db/h2/migration-audit.sql)。
+目标业务表、审计表及所需序列必须人工创建。默认 APPEND_RESUME 不清理目标、不自动 upsert；CLEAR_AND_REIMPORT 显式允许删除整张目标表。审计字段和范围恢复示例见 [审计设计](docs/audit.md)。审计 SQL：[PostgreSQL](src/main/resources/db/postgresql/migration-audit.sql)、[H2](src/main/resources/db/h2/migration-audit.sql)。
 
 ## Spring 容器内调用
 
@@ -54,7 +57,7 @@ YAML 只描述迁移工作，完整例子见 [migration.yml](examples/migration.
 mvn -B -ntp clean verify
 ```
 
-Surefire 运行 `*Test`，Failsafe 运行本地 `*IT`；真实 DEV 需显式启用。JaCoCo 单独统计 Surefire，行/分支均至少 85%。CI 使用 Java 17/21。组件为普通依赖 JAR，不是独立可执行服务；当前不承诺 Boot 2/3 兼容。
+Surefire 运行 `*Test`，Failsafe 运行本地 `*IT`；真实 DEV 需显式启用。JaCoCo 单独统计 Surefire，行/分支均至少 85%。本地和 CI 仅支持、验证 JDK 17。组件为普通依赖 JAR，不是独立可执行服务；当前不承诺 Boot 2/3 兼容。
 
 本次为破坏性改造，不兼容旧连接配置、旧批次参数和旧版本未完成检查点。Hikari 和 H2 仅用于测试/演示，不作为组件的宿主运行依赖。真实 Oracle/PostgreSQL、IAM 与云端部署仍需实际环境验收。
 

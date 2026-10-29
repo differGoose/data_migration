@@ -14,7 +14,7 @@
 </dependency>
 ```
 
-宿主使用 Boot 4.1.1 依赖管理、Java 17 及以上，并添加所用数据库的 JDBC 驱动。若用 Hikari，宿主另行添加 `com.zaxxer:HikariCP`；组件不会传递这个生产依赖。源账号只读业务数据，目标账号具备业务 INSERT、审计读写和锁权限。需要重导或序列校准时再授予对应权限。
+宿主使用 Boot 4.1.1 依赖管理、JDK 17，并添加所用数据库的 JDBC 驱动。若用 Hikari，宿主另行添加 `com.zaxxer:HikariCP`；组件不会传递这个生产依赖。源账号只读业务数据，目标账号具备业务 INSERT、审计读写和锁权限。需要重导或序列校准时再授予对应权限。
 
 目标表与审计表人工创建。[PostgreSQL 审计 SQL](../src/main/resources/db/postgresql/migration-audit.sql) 在目标库执行。字段类型和长度按源数据设计，例如：
 
@@ -152,10 +152,12 @@ spring:
 
 ## 6. 再次调用和重启
 
-同一个 Runner 重复 migrate，或重启后以同配置新建 Runner：成功表跳过，失败表恢复未完成块，序列收尾失败只重试收尾。保持 job-id、任务 name、端点身份及关键配置不变，不需要修改 YAML 来表示“我要恢复”。
+同一个 Runner 重复 migrate，或重启后以同配置新建 Runner：成功表跳过，失败表恢复未完成块，序列收尾失败只重试收尾。保持 job-id、任务 name、实际数据源及全部迁移配置不变，不需要修改 YAML 来表示“我要恢复”。
 
-配置首次绑定成功后缓存，不热更新。源库后来新增数据，也不会因为重复调用就自动同步。改 batch-size 会改变检查点指纹；不要把它当作运行中可随意调整的参数。
+配置首次绑定成功后缓存，不热更新。源库后来新增数据，也不会因为重复调用就自动同步。同 job 恢复不支持修改 batch-size 等迁移规则，组件不计算配置摘要来检测变化。
 
 方法同步返回 MigrationResult；有表失败时抛 MigrationException，通过 result().tables() 查看各表 committedRows、skippedRows、status 与脱敏错误。配置或数据源初始化错误可能抛其他运行时异常，也应阻止宿主启动。完整处理见 [运维指南](operations.md)。
 
 可运行实例位于 [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java)，使用独立 H2 合成数据，无需真实账号。
+
+同一 JVM 仅允许一次迁移执行，不同 Runner / Spring Context 的重叠调用立即失败；单次执行内部仍可多表、批次并发。部署方保证任意时刻只有一个迁移进程。仅支持和验证 JDK 17。审计结构与恢复边界见 [审计设计](audit.md)。

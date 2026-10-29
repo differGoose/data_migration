@@ -143,15 +143,13 @@ class JdbcMigrationEngineTest {
         }
     }
 
-    @Test void fingerprintMismatchIsRejected() throws Exception {
+    @Test void auditContainsOnlySummaryAndBusinessBatches() throws Exception {
         try (var db = new DatabaseFixture(); var engine = db.engine()) {
-            db.seed("A", 10);
+            db.seed("A", 250);
             engine.execute(db.plan(db.task("A")));
-            var original = db.task("A");
-            var changed = new TableTask(original.name(), "SELECT ID,NAME FROM A WHERE ID>1", original.insertSql(),
-                    original.fields(), original.targetTable(), original.primaryKey(), 1, original.mode(), original.sequence(), 100);
-            assertThatThrownBy(() -> engine.execute(db.plan(changed))).isInstanceOf(MigrationException.class);
-            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(10);
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE job_id='__table_lock__'" )).isZero();
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no=0")).isEqualTo(1);
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no>0")).isEqualTo(3);
         }
     }
 }

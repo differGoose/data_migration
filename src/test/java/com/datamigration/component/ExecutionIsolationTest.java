@@ -3,7 +3,6 @@ import com.datamigration.support.*;
 import com.datamigration.execution.*;
 
 import com.datamigration.api.*;
-import com.datamigration.audit.TableLock;
 import com.datamigration.jdbc.ConnectionAccess;
 import com.datamigration.support.DatabaseFixture;
 import org.junit.jupiter.api.Test;
@@ -18,7 +17,7 @@ class ExecutionIsolationTest {
             db.seed("A",250); db.seed("B",10); db.seed("C",10);
             CountDownLatch entered=new CountDownLatch(1), workerStopped=new CountDownLatch(1);
             var converter=new com.datamigration.conversion.JdbcValueConverter();
-            var engine=new JdbcMigrationEngine(db,20,20,db.sourceUrl+"|"+db.targetUrl,(value,type) -> {
+            var engine=new JdbcMigrationEngine(db,20,20,(value,type) -> {
                 entered.countDown();
                 try { new CountDownLatch(1).await(); }
                 catch (InterruptedException exception) {
@@ -36,35 +35,11 @@ class ExecutionIsolationTest {
                 assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
                 assertThat(db.scalar("SELECT COUNT(*) FROM B")).isZero();
                 assertThat(db.scalar("SELECT COUNT(*) FROM C")).isZero();
-                // Resource cleanup must leave the table locks available for a fresh engine.
+                // Resource cleanup must release the JVM permit for a fresh engine.
                 try (var next=db.engine()) {
                     assertThat(next.execute(db.plan(db.task("A"),db.task("B"),db.task("C"))).tables()).hasSize(3);
                 }
             } finally { engine.close(); }
-        }
-    }
-
-    @Test void anotherEngineCannotWriteWhileTargetLockIsHeld() throws Exception {
-        try (var db=new DatabaseFixture(); var engine=db.engine(); var control=db.openTargetConnection()) {
-            db.seed("A",10);
-            try (var guard=TableLock.acquire(db,control,"migration_audit","PUBLIC.A")) {
-                guard.check();
-                assertThatThrownBy(() -> engine.execute(db.plan(db.task("A")))).isInstanceOf(MigrationException.class);
-                assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
-            }
-            assertThat(engine.execute(db.plan(db.task("A"))).tables().get(0).committedRows()).isEqualTo(10);
-        }
-    }
-
-    @Test void configurationMismatchMustNotOverwriteSuccessfulAudit() throws Exception {
-        try (var db=new DatabaseFixture(); var engine=db.engine()) {
-            db.seed("A",10);
-            engine.execute(db.plan(db.task("A")));
-            var old=db.task("A");
-            var changed=new com.datamigration.model.TableTask(old.name(),"SELECT ID,NAME FROM A WHERE ID>5",
-                    old.insertSql(),old.fields(),old.targetTable(),old.primaryKey(),old.workerCount(),old.mode(),old.sequence(),old.batchSize());
-            assertThatThrownBy(() -> engine.execute(db.plan(changed))).isInstanceOf(MigrationException.class);
-            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE job_id='job' AND batch_no=0 AND state='SUCCEEDED'")).isEqualTo(1);
         }
     }
 
@@ -88,6 +63,13 @@ class ExecutionIsolationTest {
                 var first=callers.submit(() -> engine.execute(db.plan(db.task("A"))));
                 assertThat(entered.await(5,TimeUnit.SECONDS)).isTrue();
                 assertThatThrownBy(() -> engine.execute(db.plan(db.task("A")))).hasMessageContaining("already running");
+                try (var other=db.engine()) {
+                    assertThatThrownBy(() -> other.execute(db.plan(db.task("B")))).hasMessageContaining("already running");
+                }
+                // Closing an idle engine must not release the active engine's permit.
+                try (var third=db.engine()) {
+                    assertThatThrownBy(() -> third.execute(db.plan(db.task("C")))).hasMessageContaining("already running");
+                }
                 release.countDown();
                 assertThat(first.get(15,TimeUnit.SECONDS).tables().get(0).committedRows()).isEqualTo(10);
             } finally { release.countDown(); engine.close(); }
@@ -100,7 +82,7 @@ class ExecutionIsolationTest {
             db.seed("A",10);
             assertThatThrownBy(() -> engine.execute(db.plan())).hasMessageContaining("No enabled");
             assertThatThrownBy(() -> engine.execute(db.plan("__reserved",0,db.task("A")))).hasMessageContaining("Invalid job");
-            try (var small=new JdbcMigrationEngine(db,1,1,"test",new com.datamigration.conversion.JdbcValueConverter())) {
+            try (var small=new JdbcMigrationEngine(db,1,1,new com.datamigration.conversion.JdbcValueConverter())) {
                 assertThatThrownBy(() -> small.execute(db.plan(db.task("A")))).hasMessageContaining("Insufficient pool");
             }
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();

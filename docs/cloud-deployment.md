@@ -50,6 +50,8 @@ ECS **task role** 用于应用的 AWS API 权限，**task execution role** 用�
 
 `examples/ecs/Dockerfile` 使用宿主产物 host.jar，构建前须完成宿主自己的构建。镜像和例子未在 ECS 部署验证。
 
+同一时刻只能运行一个迁移进程，包括部署切换与重试期间。JVM许可无法阻止不同容器重叠，必须由部署流程确保前一个任务已退出。恢复保持原job-id、全部配置、实际数据源和源范围不变；仅支持JDK 17。审计DDL及字段见 [审计设计](audit.md)。
+
 任务定义要点：
 
 - 使用独立一次性任务，配置所需 CPU/内存、日志、task role、execution role 和证书只读挂载。

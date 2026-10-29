@@ -1,0 +1,13 @@
+# Load AFTER oracle-postgresql.yml. The external DataSource class must route connections through these proxies.
+e2e:
+  scenario: ${E2E_SCENARIO:SOURCE_OUTAGE}
+  trigger-task: customer
+  trigger-commit: 2
+  source-proxy:
+    upstream-host: ${E2E_SOURCE_HOST}
+    upstream-port: ${E2E_SOURCE_PORT:1521}
+    port: 0
+  target-proxy:
+    upstream-host: ${E2E_TARGET_HOST}
+    upstream-port: ${E2E_TARGET_PORT:5432}
+    port: 0

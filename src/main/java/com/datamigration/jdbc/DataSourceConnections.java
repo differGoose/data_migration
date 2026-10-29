@@ -1,8 +1,6 @@
 package com.datamigration.jdbc;
 
 import java.lang.reflect.*;
-import java.nio.charset.StandardCharsets;
-import java.security.*;
 import java.sql.*;
 import java.util.*;
 import javax.sql.DataSource;
@@ -60,26 +58,4 @@ public final class DataSourceConnections implements ConnectionAccess {
                 ? new SQLException(message, sql.getSQLState(), sql.getErrorCode()) : new SQLException(message);
     }
 
-    /** Only a digest leaves this method; metadata and credentials must never be logged. */
-    public String identity() throws SQLException {
-        try (var s = openSourceConnection(); var t = openTargetConnection()) {
-            String material = "datasource-v2\n" + endpoint(s) + "\n" + endpoint(t);
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(material.getBytes(StandardCharsets.UTF_8)));
-        } catch (SQLException | RuntimeException | NoSuchAlgorithmException failure) {
-            throw new SQLException("Cannot establish stable migration endpoint identity");
-        }
-    }
-
-    private String endpoint(Connection connection) throws SQLException {
-        var metadata = connection.getMetaData();
-        String url = metadata.getURL(), user = metadata.getUserName();
-        if (url == null || !url.startsWith("jdbc:") || user == null || user.isBlank())
-            throw new SQLException("Missing endpoint identity");
-        // Connection options can contain rotating passwords/tokens. Catalog/schema retain namespace identity.
-        String base = url.split("[?;]", 2)[0]
-                .replaceFirst("(jdbc:oracle:thin:)[^@]*(?=@)", "$1")
-                .replaceAll("//[^/@]+:[^/@]*@", "//");
-        return base + "\n" + user + "\n" + connection.getCatalog() + "\n" + connection.getSchema();
-    }
 }

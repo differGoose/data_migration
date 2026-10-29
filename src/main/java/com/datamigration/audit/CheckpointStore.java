@@ -44,15 +44,15 @@ public final class CheckpointStore {
         }
     }
 
-    public void create(Connection connection, long batch, String target, String fingerprint,
+    public void create(Connection connection, long batch, String target,
                        List<KeyCodec.Value> lower, List<KeyCodec.Value> upper, long expected) throws SQLException {
         try (var statement = statement(connection, "INSERT INTO " + table +
-                " (job_id,task_name,batch_no,target_table,fingerprint,lower_key,upper_key,expected_rows,state)" +
-                " VALUES (?,?,?,?,?,?,?,?,'PLANNED')")) {
+                " (job_id,task_name,batch_no,target_table,lower_key,upper_key,expected_rows,state)" +
+                " VALUES (?,?,?,?,?,?,?,'PLANNED')")) {
             id(statement, batch);
-            statement.setString(4, target); statement.setString(5, fingerprint);
-            statement.setString(6, KeyCodec.encode(lower)); statement.setString(7, KeyCodec.encode(upper));
-            statement.setLong(8, expected); statement.executeUpdate();
+            statement.setString(4, target);
+            statement.setString(5, KeyCodec.encode(lower)); statement.setString(6, KeyCodec.encode(upper));
+            statement.setLong(7, expected); statement.executeUpdate();
         }
     }
 
@@ -102,7 +102,7 @@ public final class CheckpointStore {
     }
 
     public void check(Connection connection) throws SQLException {
-        try (var statement = statement(connection, "SELECT job_id,task_name,batch_no,state,fingerprint," +
+        try (var statement = statement(connection, "SELECT job_id,task_name,batch_no,state," +
                 "prepared,data_complete,planning_complete,lower_key,upper_key FROM " + table + " WHERE 1=0")) {
             statement.executeQuery().close();
         }
@@ -132,6 +132,6 @@ public final class CheckpointStore {
                 result.getLong("expected_rows"), result.getLong("committed_rows"), result.getLong("skipped_rows"),
                 result.getInt("retries"), result.getLong("total_rows"), result.getLong("processed_rows"),
                 result.getBoolean("planning_complete"), result.getBoolean("prepared"),
-                result.getBoolean("data_complete"), result.getString("fingerprint"));
+                result.getBoolean("data_complete"));
     }
 }

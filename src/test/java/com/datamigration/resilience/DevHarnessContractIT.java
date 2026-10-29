@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.*;
 class DevHarnessContractIT {
     @TempDir Path directory;
     @Configuration(proxyBeanMethods = false)
-    public static class Credentials {
+    public static class ExternalDataSources {
         @Bean @Lazy @MigrationSource(capacity=6)
         javax.sql.DataSource externalSource(org.springframework.core.env.Environment env) {
             return new org.springframework.jdbc.datasource.DriverManagerDataSource(env.getRequiredProperty("test.source-url"), "sa", "");
@@ -25,7 +25,7 @@ class DevHarnessContractIT {
             return new org.springframework.jdbc.datasource.DriverManagerDataSource(env.getRequiredProperty("test.target-url"), "sa", "");
         }
     }
-    @Test void externalConfigurationAndCredentialBeansWorkWithoutDevFixtureMutation() throws Exception {
+    @Test void externalDataSourcesSupportRepeatedCallsWithoutFixtureMutation() throws Exception {
         try (var databases = new TcpDatabases(directory.resolve("prepared"), false)) {
             databases.seed(10000); // Explicit preparation by the caller, outside the suite.
             Path config = directory.resolve("dev.properties");
@@ -34,7 +34,7 @@ class DevHarnessContractIT {
             properties.setProperty("spring.config.import", "classpath:resilience/h2.yml");
             properties.setProperty("resilience.environment", "dev");
             properties.setProperty("resilience.scenario", "TARGET_OUTAGE");
-            properties.setProperty("resilience.configuration-classes[0]", Credentials.class.getName());
+            properties.setProperty("resilience.configuration-classes[0]", ExternalDataSources.class.getName());
             for (String side : List.of("source", "target")) {
                 String url = side.equals("source") ? databases.sourceUrl() : databases.targetUrl();
                 int port = URI.create(url.substring("jdbc:h2:".length())).getPort();
@@ -54,9 +54,11 @@ class DevHarnessContractIT {
                 rows.next(); assertThat(rows.getLong(1)).isEqualTo(10000);
             }
             assertThat(Files.readString(output.resolve("result.properties"))).contains("environment=dev", "status=PASSED");
-            // New scenario on a nonempty target must fail before writing/clearing anything.
-            assertThatThrownBy(() -> ResilienceSuite.run(config.toUri().toString(), overrides, directory.resolve("reject")))
-                    .isInstanceOf(AssertionError.class).hasMessageContaining("must be empty");
+            // Same job on nonempty target uses the formal completed-job behavior, not a preflight rejection.
+            Path repeat = directory.resolve("repeat");
+            ResilienceSuite.run(config.toUri().toString(), overrides, repeat);
+            assertThat(Files.readString(repeat.resolve("result.properties")))
+                    .contains("status=PASSED", "faultTriggered=false", "alreadyCompleted=true");
         }
     }
 }

@@ -48,32 +48,4 @@ class DataSourceConnectionsTest {
         doThrow(new IllegalStateException("password=private")).when(ds).getConnection();
         assertThatThrownBy(access::openSourceConnection).hasMessage("Cannot borrow migration connection").hasNoCause();
     }
-    Connection endpoint(String url,String user,String schema) throws Exception {
-        var raw=mock(Connection.class); var metadata=mock(DatabaseMetaData.class);
-        when(raw.getMetaData()).thenReturn(metadata); when(metadata.getURL()).thenReturn(url);
-        when(metadata.getUserName()).thenReturn(user); when(raw.getSchema()).thenReturn(schema);
-        return raw;
-    }
-    @Test void identityIgnoresRotatingSecretsButIncludesDatabaseUserAndSchema() throws Exception {
-        var ds=mock(DataSource.class);
-        when(ds.getConnection()).thenAnswer(inv -> endpoint("jdbc:postgresql://db/database?password=old&token=old","user","public"));
-        var access=new DataSourceConnections(ds,ds); String initial=access.identity();
-        assertThat(initial).hasSize(64).doesNotContain("jdbc", "old");
-        when(ds.getConnection()).thenAnswer(inv -> endpoint("jdbc:postgresql://db/database?password=new&token=new","user","public"));
-        assertThat(access.identity()).isEqualTo(initial);
-        when(ds.getConnection()).thenAnswer(inv -> endpoint("jdbc:postgresql://db/database","other","public"));
-        assertThat(access.identity()).isNotEqualTo(initial);
-        when(ds.getConnection()).thenAnswer(inv -> endpoint("jdbc:postgresql://db/database","user","other_schema"));
-        assertThat(access.identity()).isNotEqualTo(initial);
-        when(ds.getConnection()).thenAnswer(inv -> endpoint("jdbc:postgresql://db/other_database","user","public"));
-        assertThat(access.identity()).isNotEqualTo(initial);
-    }
-    @Test void missingMetadataIdentityFailsClearly() throws Exception {
-        for (String[] identity:new String[][]{{null,"user"},{"not-jdbc","user"},{"jdbc:h2:mem:x",null},{"jdbc:h2:mem:x",""}}) {
-            var ds=mock(DataSource.class);
-            when(ds.getConnection()).thenAnswer(inv -> endpoint(identity[0],identity[1],"public"));
-            assertThatThrownBy(() -> new DataSourceConnections(ds,ds).identity())
-                .hasMessage("Cannot establish stable migration endpoint identity").hasNoCause();
-        }
-    }
 }

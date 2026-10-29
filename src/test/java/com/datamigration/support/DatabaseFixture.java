@@ -68,7 +68,7 @@ public final class DatabaseFixture implements ConnectionAccess, AutoCloseable {
     }
     public JdbcMigrationEngine engine() { return engine(this); }
     public JdbcMigrationEngine engine(ConnectionAccess access) {
-        return new JdbcMigrationEngine(access, 20, 20, sourceUrl + "|" + targetUrl, new JdbcValueConverter());
+        return new JdbcMigrationEngine(access, 20, 20, new JdbcValueConverter());
     }
     @Override public void close() throws SQLException {
         for (String url : List.of(sourceUrl, targetUrl)) {

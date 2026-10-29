@@ -5,7 +5,7 @@
 | 文件 | Java package | 用途 |
 | --- | --- | --- |
 | [component/DatabaseDialectTest.java](../src/test/java/com/datamigration/component/DatabaseDialectTest.java) | `com.datamigration.component` | 组件契约。 |
-| [component/DataSourceConnectionsTest.java](../src/test/java/com/datamigration/component/DataSourceConnectionsTest.java) | `com.datamigration.component` | 借用归还、回滚失败、身份稳定性及错误脱敏。 |
+| [component/DataSourceConnectionsTest.java](../src/test/java/com/datamigration/component/DataSourceConnectionsTest.java) | `com.datamigration.component` | 借用归还、回滚失败、错误脱敏。 |
 | [component/ExampleConfigurationTest.java](../src/test/java/com/datamigration/component/ExampleConfigurationTest.java) | `com.datamigration.component` | 组件契约。 |
 | [component/ExecutionIsolationTest.java](../src/test/java/com/datamigration/component/ExecutionIsolationTest.java) | `com.datamigration.component` | 组件契约。 |
 | [component/ExecutorScopeTest.java](../src/test/java/com/datamigration/component/ExecutorScopeTest.java) | `com.datamigration.component` | 组件契约。 |
@@ -17,7 +17,6 @@
 | [component/ResilienceBoundaryTest.java](../src/test/java/com/datamigration/component/ResilienceBoundaryTest.java) | `com.datamigration.support` | 访问测试设施包内 JDBC 装饰器。 |
 | [component/ResilienceConfigurationTest.java](../src/test/java/com/datamigration/component/ResilienceConfigurationTest.java) | `com.datamigration.component` | 组件契约。 |
 | [component/RowDigestTest.java](../src/test/java/com/datamigration/component/RowDigestTest.java) | `com.datamigration.component` | 组件契约。 |
-| [component/TableLockTest.java](../src/test/java/com/datamigration/component/TableLockTest.java) | `com.datamigration.component` | 组件契约。 |
 | [component/TcpFaultProxyTest.java](../src/test/java/com/datamigration/component/TcpFaultProxyTest.java) | `com.datamigration.component` | 组件契约。 |
 | [component/TransactionRecoveryTest.java](../src/test/java/com/datamigration/component/TransactionRecoveryTest.java) | `com.datamigration.component` | 组件契约。 |
 | [demo/BeforeStartupDemo.java](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java) | `com.datamigration.demo` | 可直接运行的 H2 启动前迁移示例。 |
@@ -25,12 +24,11 @@
 | [e2e/H2MigrationIT.java](../src/test/java/com/datamigration/e2e/H2MigrationIT.java) | `com.datamigration.e2e` | 完整迁移、类型和TLS。 |
 | [e2e/H2ScenariosIT.java](../src/test/java/com/datamigration/e2e/H2ScenariosIT.java) | `com.datamigration.e2e` | 完整迁移、类型和TLS。 |
 | [e2e/H2TlsIT.java](../src/test/java/com/datamigration/e2e/H2TlsIT.java) | `com.datamigration.e2e` | 完整迁移、类型和TLS。 |
-| [resilience/ConfiguredResilienceIT.java](../src/test/java/com/datamigration/resilience/ConfiguredResilienceIT.java) | `com.datamigration.resilience` | 断网、崩溃、所有权和恢复。 |
+| [resilience/ConfiguredResilienceIT.java](../src/test/java/com/datamigration/resilience/ConfiguredResilienceIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
 | [resilience/DevHarnessContractIT.java](../src/test/java/com/datamigration/resilience/DevHarnessContractIT.java) | `com.datamigration.resilience` | 用人工预备H2验证DEV宿主DataSource扩展，不代表真实数据库验收。 |
-| [resilience/H2OwnershipIT.java](../src/test/java/com/datamigration/resilience/H2OwnershipIT.java) | `com.datamigration.resilience` | 断网、崩溃、所有权和恢复。 |
-| [resilience/H2ProcessRecoveryIT.java](../src/test/java/com/datamigration/resilience/H2ProcessRecoveryIT.java) | `com.datamigration.resilience` | 断网、崩溃、所有权和恢复。 |
-| [resilience/H2RecoveryIT.java](../src/test/java/com/datamigration/resilience/H2RecoveryIT.java) | `com.datamigration.resilience` | 断网、崩溃、所有权和恢复。 |
-| [resilience/H2ResilienceIT.java](../src/test/java/com/datamigration/resilience/H2ResilienceIT.java) | `com.datamigration.resilience` | 断网、崩溃、所有权和恢复。 |
+| [resilience/H2ProcessRecoveryIT.java](../src/test/java/com/datamigration/resilience/H2ProcessRecoveryIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
+| [resilience/H2RecoveryIT.java](../src/test/java/com/datamigration/resilience/H2RecoveryIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
+| [resilience/H2ResilienceIT.java](../src/test/java/com/datamigration/resilience/H2ResilienceIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
 | [support/DatabaseFixture.java](../src/test/java/com/datamigration/support/DatabaseFixture.java) | `com.datamigration.support` | 数据库、宿主、代理、控制和数据校验设施。 |
 | [support/H2RecoveryWorker.java](../src/test/java/com/datamigration/support/H2RecoveryWorker.java) | `com.datamigration.support` | 数据库、宿主、代理、控制和数据校验设施。 |
 | [support/HostDataSources.java](../src/test/java/com/datamigration/support/HostDataSources.java) | `com.datamigration.support` | 测试宿主自建 Hikari 池，不是组件连接配置。 |
@@ -48,3 +46,13 @@
 | [unit/KeyCodecTest.java](../src/test/java/com/datamigration/unit/KeyCodecTest.java) | `com.datamigration.unit` | 独立逻辑。 |
 | [unit/SqlErrorsTest.java](../src/test/java/com/datamigration/unit/SqlErrorsTest.java) | `com.datamigration.unit` | 独立逻辑。 |
 | [unit/SqlSupportTest.java](../src/test/java/com/datamigration/unit/SqlSupportTest.java) | `com.datamigration.sql` | 访问生产包内 tokens 方法，保留原 package。 |
+
+新增外部E2E入口及验证设施：
+
+- `support/DatabaseE2E`：直接对象方法、main与配置入口，普通场景调用正式Runner。
+- `support/E2EHost` / `E2ESettings` / `E2EValidation`：外部Bean选择、场景配置、数据及审计校验。
+- `e2e/ConfiguredDatabaseE2EIT`：默认跳过，真实配置显式启用。
+- `component/ExternalDatabaseE2ETest`：调用方准备H2验证对象所有权、续跑、新job、跳过子集及超时。
+- `e2e/ExternalFaultE2EIT`：调用方准备H2服务器，通过外部配置类验证四种故障、重复调用及无键重导恢复。
+
+- [component/GlobalMigrationExecutionTest.java](../src/test/java/com/datamigration/component/GlobalMigrationExecutionTest.java)：跨 Spring Context 全局互斥、取消后清理等待、关闭空闲 Runner、最低连接预算。

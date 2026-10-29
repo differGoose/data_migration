@@ -23,8 +23,11 @@ public final class ResilienceWorker {
             properties.forEach((k, v) -> overrides.put(k.toString(), v));
             try (var context = ResilienceContexts.open(args[0], overrides)) {
                 var config = context.getBean(MigrationConfiguration.class).get();
-                var pools = context.getBean(DataSourceConnections.class);
+                var source = E2EHost.endpoint(context,MigrationSource.class);
+                var target = E2EHost.endpoint(context,MigrationTarget.class);
                 var settings = ResilienceSettings.read(context.getEnvironment());
+                javax.sql.DataSource sourceDataSource=source.dataSource();
+                javax.sql.DataSource targetDataSource=target.dataSource();
                 Set<String> inserts = new HashSet<>();
                 config.toPlan().tables().stream().filter(t -> t.name().equals(settings.triggerTask()))
                         .forEach(t -> inserts.add(t.insertSql()));
@@ -32,10 +35,10 @@ public final class ResilienceWorker {
                 AtomicBoolean fired = new AtomicBoolean();
                 boolean inject = args[2].equals("fault");
                 Path control = Path.of(args[3]);
-                ConnectionAccess access = new ConnectionAccess() {
-                    public Connection openSourceConnection() throws SQLException { return pools.openSourceConnection(); }
-                    public Connection openTargetConnection() throws SQLException {
-                        return wrap(pools.openTargetConnection(), inserts, () -> {
+                javax.sql.DataSource decorated = new org.springframework.jdbc.datasource.AbstractDataSource() {
+                    public Connection getConnection(String user,String password) throws SQLException { throw new SQLFeatureNotSupportedException(); }
+                    public Connection getConnection() throws SQLException {
+                        return wrap(targetDataSource.getConnection(), inserts, () -> {
                             if (!inject || commits.incrementAndGet() != settings.triggerCommit()
                                     || !fired.compareAndSet(false, true)) return;
                             try {
@@ -50,8 +53,10 @@ public final class ResilienceWorker {
                         }, settings.scenario() == ResilienceSettings.Scenario.APP_BEFORE_COMMIT);
                     }
                 };
-                try (var engine = new JdbcMigrationEngine(access, 6, 6, pools.identity(), context.getBean(ValueConverter.class))) {
-                    engine.execute(config.toPlan());
+                try (var runner = MigrationRunner.builder().source(sourceDataSource,source.capacity())
+                        .target(decorated,target.capacity()).environment(context.getEnvironment())
+                        .converter(context.getBean(ValueConverter.class)).build()) {
+                    runner.migrate();
                 }
             }
         } catch (MigrationException e) { exit = 20; }

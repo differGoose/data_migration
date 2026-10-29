@@ -59,7 +59,7 @@ class H2RecoveryIT {
             };
             try (var context = new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties())
                     .initializers(application -> application.getBeanFactory().registerSingleton("faultEngine",
-                        new JdbcMigrationEngine(access, 6, 6, databases.sourceUrl()+"|"+databases.targetUrl(),
+                        new JdbcMigrationEngine(access, 6, 6,
                                 new JdbcValueConverter())))
                     .run("--spring.config.location=classpath:recovery.yml")) {
                 assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate()).isInstanceOf(MigrationException.class);
@@ -79,7 +79,7 @@ class H2RecoveryIT {
             };
             try (var context = new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties())
                     .initializers(application -> application.getBeanFactory().registerSingleton("restoredEngine",
-                        new JdbcMigrationEngine(restored, 6, 6, databases.sourceUrl()+"|"+databases.targetUrl(),
+                        new JdbcMigrationEngine(restored, 6, 6,
                                 new JdbcValueConverter())))
                     .run("--spring.config.location=classpath:recovery.yml")) {
                 assertThat(context.getBean(MigrationService.class).migrate().tables().get(0).committedRows()).isEqualTo(10_000);

@@ -15,10 +15,6 @@ public class HostDataSources {
     @Bean(destroyMethod = "close") @Lazy @MigrationTarget(capacity = 10)
     @ConditionalOnProperty("host-databases.target.jdbc-url")
     HikariDataSource hostTarget(Environment env) { return create(env, "target"); }
-    public static String identity(com.datamigration.jdbc.DataSourceConnections connections) {
-        try { return connections.identity(); }
-        catch (java.sql.SQLException e) { throw new IllegalStateException("Test host identity unavailable"); }
-    }
     private HikariDataSource create(Environment env, String side) {
         String prefix = "host-databases." + side + ".";
         var ds = new HikariDataSource();

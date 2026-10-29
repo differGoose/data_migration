@@ -118,6 +118,12 @@ class MigrationRunnerTest {
                 var future=executor.submit(runner::migrate);
                 assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
                 assertThatThrownBy(runner::migrate).hasMessageContaining("already running");
+                try (var second=runner(db,configuration()).build()) {
+                    assertThatThrownBy(second::migrate).hasMessageContaining("already running");
+                }
+                try (var third=runner(db,configuration()).build()) {
+                    assertThatThrownBy(third::migrate).hasMessageContaining("already running");
+                }
                 runner.close();
                 assertThatThrownBy(() -> future.get(10,TimeUnit.SECONDS)).isInstanceOf(ExecutionException.class);
                 assertThatThrownBy(runner::migrate).hasMessageContaining("closed");
@@ -135,24 +141,12 @@ class MigrationRunnerTest {
         }
         verifyNoInteractions(ds);
     }
-    @Test void endpointFailureIsSanitizedAndCanBeRetried() throws Exception {
+    @Test void connectionFailureUsesNormalMigrationResultAndCanBeRetried() throws Exception {
         var ds=mock(javax.sql.DataSource.class);
         when(ds.getConnection()).thenThrow(new SQLException("private-password"));
         try(var runner=MigrationRunner.builder().source(ds,4).target(ds,4).configLocations(configuration().toUri().toString()).build()) {
-            assertThatThrownBy(runner::migrate).hasMessage("Cannot initialize migration endpoints").hasNoCause();
-            assertThatThrownBy(runner::migrate).hasMessage("Cannot initialize migration endpoints");
-        }
-    }
-    @Test void changingTableBatchSizeCannotReuseExistingCheckpoint() throws Exception {
-        try(var db=new DatabaseFixture()) {
-            db.seed("A",40); db.seed("B",25); Path yaml=configuration();
-            try(var first=runner(db,yaml).build()) { first.migrate(); }
-            Files.writeString(yaml,Files.readString(yaml).replace("batch-size: 17","batch-size: 19"));
-            try(var changed=runner(db,yaml).build()) {
-                assertThatThrownBy(changed::migrate).isInstanceOf(MigrationException.class);
-            }
-            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(40);
-            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE job_id='startup' AND task_name='A' AND batch_no=0 AND state='SUCCEEDED'")).isEqualTo(1);
+            assertThatThrownBy(runner::migrate).isInstanceOf(MigrationException.class).hasMessageNotContaining("private-password");
+            assertThatThrownBy(runner::migrate).isInstanceOf(MigrationException.class);
         }
     }
 }

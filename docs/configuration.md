@@ -6,7 +6,7 @@
 
 job-id 是整轮工作的稳定编号，同一配置中各表共用它；tables[].name 区分表任务。runId 由每次 API 调用生成，不是恢复身份。相同 job-id/name 重试恢复原进度，换新 job 不会自动清理目标或去重。
 
-源、目标身份从 JDBC 元数据取得 URL、用户名、catalog 和 schema；连接选项中的口令/token 不参与身份，最终只使用摘要，不记录明文。宿主必须返回能提供可靠元数据的连接，恢复时保持数据库和命名空间不变。
+恢复期间保持两个实际数据库、命名空间、迁移配置与源数据范围不变。组件不计算端点身份或配置摘要，不自动检测配置变动；同 job 不支持修改规则后续跑。
 
 ## 唯一的行数参数：tables[].batch-size
 
@@ -38,14 +38,16 @@ target-table 必须与 INSERT 的实际目标一致；只支持普通 table 或 
 
 ## 并发和连接容量
 
+JVM 共享单许可只允许一次 migrate，重叠调用立即失败；该限制覆盖不同 Runner 和 Spring Context，不影响一次调用内部的并发。不同进程须由部署方保证不重叠。
+
 max-concurrent-tables 控制表并发，worker-count 控制单表块并发：
 
 | 单表类型 | 源连接 | 目标连接 |
 | --- | --- | --- |
-| 有键，W 个 worker | W+1 | W+2 |
-| 无键，1 个 worker | 1 | 3 |
+| 有键，W 个 worker | W+1 | W+1 |
+| 无键，1 个 worker | 1 | 2 |
 
-两张单 worker 有键表同时执行，至少源4、目标6。宿主在 builder.source/target 或源/目标注解的 capacity 中声明可供迁移的连接数，组件执行前预检；声明不会自动扩容池。共享业务池还需要额外为业务预留容量。
+两张单 worker 有键表同时执行，至少源4、目标4。宿主在 builder.source/target 或源/目标注解的 capacity 中声明可供迁移的连接数，组件执行前预检；声明不会自动扩容池。共享业务池还需要额外为业务预留容量。
 
 宿主负责池借用超时、JDBC 连接和读超时、连接回收及动态凭据。Runner 不关闭数据源。连接借出后设为 autoCommit=false、READ_COMMITTED，结束未完成事务后恢复原 autoCommit/隔离级别并归还。请提供干净的独立连接，不要包装正在使用的业务事务 Connection。
 
@@ -69,4 +71,4 @@ CLEAR_AND_REIMPORT 显式 DELETE 整张目标表，不只清源 SELECT 范围。
 
 configLocations 后文件覆盖前文件，命令行优先，环境变量和 profile 按 Boot 配置规则处理。Spring 列表整体替换，tables/fields 不能按名称增量合并。首次绑定成功后配置缓存；修改文件不会让已有 Runner 热加载。
 
-本版不接管旧版未完成检查点，旧 API 和配置不保留。审计结构保持不变，不等于跨版本任务兼容。
+本版不接管旧版未完成检查点，旧 API 和配置不保留。审计表已删除 fingerprint 列和内部执行锁记录，详见 [审计设计](audit.md)。旧任务先用旧版本完成；使用者人工准备新版审计表，组件不自动转换或 ALTER。

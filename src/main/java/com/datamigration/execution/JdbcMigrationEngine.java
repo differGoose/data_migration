@@ -7,8 +7,6 @@ import com.datamigration.dialect.DatabaseDialect;
 import com.datamigration.jdbc.*;
 import com.datamigration.model.*;
 import com.datamigration.sql.*;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -20,7 +18,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     private final ConnectionAccess connections;
     private final int sourceCapacity;
     private final int targetCapacity;
-    private final String endpointIdentity;
+    private static final Semaphore EXECUTION = new Semaphore(1);
     private final JdbcRows rows;
     private final AtomicBoolean running = new AtomicBoolean();
     private final Object lifecycle = new Object();
@@ -29,9 +27,9 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     private volatile boolean closed;
 
     public JdbcMigrationEngine(ConnectionAccess connections, int sourceCapacity, int targetCapacity,
-                               String endpointIdentity, ValueConverter converter) {
+                               ValueConverter converter) {
         this.connections = connections; this.sourceCapacity = sourceCapacity;
-        this.targetCapacity = targetCapacity; this.endpointIdentity = endpointIdentity;
+        this.targetCapacity = targetCapacity;
         this.rows = new JdbcRows(converter);
     }
 
@@ -39,6 +37,10 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         synchronized (lifecycle) {
             if (closed) throw new IllegalStateException("Migration engine is closed");
             if (!running.compareAndSet(false, true)) throw new IllegalStateException("A migration is already running");
+            if (!EXECUTION.tryAcquire()) {
+                running.set(false);
+                throw new IllegalStateException("A migration is already running in this JVM");
+            }
             caller = Thread.currentThread();
         }
         Instant start = Instant.now();
@@ -79,7 +81,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
             return result;
         } finally {
             synchronized (lifecycle) {
-                running.set(false); caller = null; lifecycle.notifyAll();
+                running.set(false); caller = null; EXECUTION.release(); lifecycle.notifyAll();
             }
         }
     }
@@ -90,10 +92,10 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         if (plan.jobId() == null || !plan.jobId().matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,119}"))
             throw new IllegalArgumentException("Invalid job-id");
         int parallel = plan.strategy().maxConcurrentTables();
-        // Separate coordinator + lock-guard target connections; workers never wait while owning the control connection.
+        // One coordinator plus worker connections; keyless tables use one source and two targets.
         int sources = plan.tables().stream().mapToInt(t -> t.keyed() ? t.workerCount() + 1 : 1)
                 .boxed().sorted(Comparator.reverseOrder()).limit(parallel).mapToInt(Integer::intValue).sum();
-        int targets = plan.tables().stream().mapToInt(t -> t.workerCount() + 2)
+        int targets = plan.tables().stream().mapToInt(t -> t.workerCount() + 1)
                 .boxed().sorted(Comparator.reverseOrder()).limit(parallel).mapToInt(Integer::intValue).sum();
         if (sources > sourceCapacity || targets > targetCapacity)
             throw new IllegalArgumentException("Insufficient pool capacity; source requires " + sources + ", target requires " + targets);
@@ -109,74 +111,63 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         Instant start = Instant.now();
         CheckpointStore store = new CheckpointStore(plan.strategy().auditTableName(), plan.jobId(), task.name());
         boolean finalizedData = false;
-        boolean authorizedCheckpoint = false;
+        boolean checkpointValidated = false;
         try (Connection control = connections.openTargetConnection();
              Connection source = connections.openSourceConnection()) {
             DatabaseDialect dialect = DatabaseDialect.target(control);
             store.check(control);
             String query = SqlSupport.query(task);
             String canonicalTarget = dialect.canonicalTable(control, task.targetTable());
-            try (TableLock lock = TableLock.acquire(connections, control, store.table(), canonicalTarget)) {
-                String fingerprint = fingerprint(plan, task);
-                Checkpoint summary = store.find(control, 0, false);
-                if (summary != null && !fingerprint.equals(summary.fingerprint()))
-                    throw new IllegalArgumentException("Checkpoint configuration fingerprint mismatch");
-                authorizedCheckpoint = true;
-                if (summary != null && summary.succeeded()) return result(task, start, summary, TableResult.Status.SUCCEEDED, null);
-                List<String> keys = preflight(source, control, query, task);
-                if (summary == null) {
-                    store.create(control, 0, canonicalTarget, fingerprint, null, null, 0);
+            Checkpoint summary = store.find(control, 0, false);
+            checkpointValidated = true;
+            if (summary != null && summary.succeeded()) return result(task, start, summary, TableResult.Status.SUCCEEDED, null);
+            List<String> keys = preflight(source, control, query, task);
+            if (summary == null) {
+                store.create(control, 0, canonicalTarget, null, null, 0);
+                control.commit();
+            }
+            summary = store.find(control, 0, false);
+            finalizedData = summary.dataComplete();
+            if (!finalizedData) {
+                long total = count(source, query);
+                // Keep preparation and optional DELETE in the summary transaction.
+                summary = store.find(control, 0, true);
+                if (summary.prepared() && total != summary.total()) throw new IllegalArgumentException("Source row count changed");
+                if (task.keyed()) {
+                    if (!summary.prepared()) {
+                        if (task.mode() == TableTask.Mode.CLEAR_AND_REIMPORT) clear(control, task);
+                        store.prepared(control, total);
+                    }
+                    control.commit();
+                    keyed(plan, task, query, keys, source, control, store, canonicalTarget);
+                    store.find(control, 0, true);
+                    store.reconcile(control);
+                    Checkpoint done = store.find(control, 0, false);
+                    if (done.committed() + done.skipped() != total)
+                        throw new SQLException("Planned count differs from source count", "P0004");
+                    store.dataComplete(control);
+                    control.commit();
+                } else {
+                    source.close(); // Reuse the source pool slot for the single keyless worker.
+                    if (store.find(control, 1, false) == null) {
+                        store.create(control, 1, canonicalTarget, null, null, total);
+                        store.prepared(control, total);
+                    }
+                    control.commit();
+                    transfer(plan, task, query, keys, store.find(control, 1, false), store, control);
+                    store.find(control, 0, true);
+                    store.dataComplete(control);
                     control.commit();
                 }
-                summary = store.find(control, 0, false);
-                finalizedData = summary.dataComplete();
-                if (!finalizedData) {
-                    long total = count(source, query);
-                    // Hold this row through preparation/DELETE. A replacement owner drains
-                    // coordinator transactions before starting its own reset.
-                    summary = store.find(control, 0, true);
-                    lock.assertOwner(control);
-                    if (summary.prepared() && total != summary.total()) throw new IllegalArgumentException("Source row count changed");
-                    if (task.keyed()) {
-                        if (!summary.prepared()) {
-                            if (task.mode() == TableTask.Mode.CLEAR_AND_REIMPORT) clear(control, task);
-                            store.prepared(control, total);
-                        }
-                        control.commit();
-                        keyed(plan, task, query, keys, source, control, store, lock, fingerprint, canonicalTarget);
-                        store.find(control, 0, true);
-                        lock.assertOwner(control);
-                        store.reconcile(control);
-                        Checkpoint done = store.find(control, 0, false);
-                        if (done.committed() + done.skipped() != total)
-                            throw new SQLException("Planned count differs from source count", "P0004");
-                        store.dataComplete(control);
-                        control.commit();
-                    } else {
-                        source.close(); // Reuse the source pool slot for the single keyless worker.
-                        if (store.find(control, 1, false) == null) {
-                            store.create(control, 1, canonicalTarget, fingerprint, null, null, total);
-                            store.prepared(control, total);
-                        }
-                        control.commit();
-                        transfer(plan, task, query, keys, store.find(control, 1, false), store, lock, control);
-                        store.find(control, 0, true);
-                        lock.assertOwner(control);
-                        store.dataComplete(control);
-                        control.commit();
-                    }
-                    finalizedData = true;
-                }
-                lock.check();
-                store.find(control, 0, true);
-                lock.assertOwner(control);
-                dialect.calibrate(control, task.targetTable(), task.sequence());
-                // H2 ALTER SEQUENCE and PostgreSQL setval are not rollbackable, but neither
-                // commits this transaction. Retain the summary lock through the final status.
-                store.state(control, 0, "SUCCEEDED");
-                control.commit();
-                return result(task, start, store.find(control, 0, false), TableResult.Status.SUCCEEDED, null);
+                finalizedData = true;
             }
+            store.find(control, 0, true);
+            dialect.calibrate(control, task.targetTable(), task.sequence());
+            // H2 ALTER SEQUENCE and PostgreSQL setval are not rollbackable, but neither
+            // commits this transaction. Retain the summary lock through the final status.
+            store.state(control, 0, "SUCCEEDED");
+            control.commit();
+            return result(task, start, store.find(control, 0, false), TableResult.Status.SUCCEEDED, null);
         } catch (Exception exception) {
             String state = exception instanceof CommitUnknownException ? "COMMIT_UNKNOWN" :
                     finalizedData ? "FINALIZATION_FAILED" : "FAILED";
@@ -184,13 +175,9 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
             Checkpoint summary = null;
             try (Connection report = connections.openTargetConnection()) {
                 summary = store.find(report, 0, false);
-                if (authorizedCheckpoint && summary != null) {
-                    String canonical = DatabaseDialect.target(report).canonicalTable(report, task.targetTable());
-                    try (TableLock reportingLock = TableLock.acquire(connections, report, store.table(), canonical)) {
-                        summary = store.find(report, 0, false);
-                        // A newer owner may already have recovered this task; never overwrite its success.
-                        if (!summary.succeeded()) { store.failure(report, 0, state, error); report.commit(); }
-                    }
+                if (checkpointValidated && summary != null) {
+                    summary = store.find(report, 0, true);
+                    if (!summary.succeeded()) { store.failure(report, 0, state, error); report.commit(); }
                 }
             } catch (Exception ignored) { /* Database outage: return failure without claiming durable error persistence. */ }
             return result(task, start, summary, TableResult.Status.valueOf(state), error);
@@ -242,16 +229,16 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     }
 
     private void keyed(MigrationPlan plan, TableTask task, String query, List<String> keys, Connection source,
-                       Connection control, CheckpointStore store, TableLock lock, String fingerprint, String target) throws Exception {
+                       Connection control, CheckpointStore store, String target) throws Exception {
         int window = Math.multiplyExact(task.workerCount(), 2);
         ExecutorService workers = Executors.newFixedThreadPool(task.workerCount(), workerFactory());
         try (var workerScope = new ExecutorScope(workers)) {
             while (true) {
-                checkRunning(lock);
+                checkRunning();
                 List<Checkpoint> pending = store.pending(control, window);
                 if (pending.isEmpty()) {
                     if (store.find(control, 0, false).planningComplete()) break;
-                    planWindow(plan, task, query, keys, source, control, store, lock, window, fingerprint, target);
+                    planWindow(task, query, keys, source, control, store, window, target);
                     pending = store.pending(control, window);
                     if (pending.isEmpty()) continue;
                 }
@@ -260,7 +247,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                 for (Checkpoint batch : pending) {
                     futures.add(workers.submit(() -> {
                         if (failed.get()) return null; // Leave queued work durably pending for recovery.
-                        try { transfer(plan, task, query, keys, batch, store, lock, null); }
+                        try { transfer(plan, task, query, keys, batch, store, null); }
                         catch (Exception exception) { failed.set(true); throw exception; }
                         return null;
                     }));
@@ -280,10 +267,9 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         }
     }
 
-    private void planWindow(MigrationPlan plan, TableTask task, String query, List<String> keys, Connection source, Connection control,
-                            CheckpointStore store, TableLock lock, int window, String fingerprint, String target) throws SQLException {
+    private void planWindow(TableTask task, String query, List<String> keys, Connection source, Connection control,
+                            CheckpointStore store, int window, String target) throws SQLException {
         store.find(control, 0, true);
-        lock.assertOwner(control);
         Checkpoint last = store.last(control);
         List<KeyCodec.Value> lower = last == null ? null : last.upper();
         long number = last == null ? 1 : last.batch() + 1;
@@ -297,11 +283,11 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                 while (result.next()) {
                     upper = KeyCodec.read(result, keys.size()); count++;
                     if (count == task.batchSize()) {
-                        store.create(control, number++, target, fingerprint, lower, upper, count);
+                        store.create(control, number++, target, lower, upper, count);
                         lower = upper; count = 0; batches++;
                     }
                 }
-                if (count > 0) store.create(control, number, target, fingerprint, lower, upper, count);
+                if (count > 0) store.create(control, number, target, lower, upper, count);
                 if (batches < window) store.planningComplete(control);
             }
         }
@@ -309,19 +295,18 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     }
 
     private void transfer(MigrationPlan plan, TableTask task, String query, List<String> keys, Checkpoint batch,
-                          CheckpointStore store, TableLock lock, Connection progressConnection) throws Exception {
+                          CheckpointStore store, Connection progressConnection) throws Exception {
         MigrationStrategy strategy = plan.strategy();
         int retries = 0;
         boolean isolate = false;
         while (true) {
-            checkRunning(lock);
+            checkRunning();
             boolean committedCall = false;
             boolean rolledBack = true; // A failed acquisition has not started any transaction.
             try (Connection target = connections.openTargetConnection()) {
                 rolledBack = false;
                 try {
                     Checkpoint current = store.find(target, batch.batch(), true);
-                    lock.assertOwner(target);
                     if (current.succeeded()) { target.rollback(); return; }
                     store.state(target, batch.batch(), "RUNNING");
                     if (!task.keyed() && task.mode() == TableTask.Mode.CLEAR_AND_REIMPORT) clear(target, task);
@@ -338,7 +323,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                         });
                     }
                     if (counts.read() != batch.expected()) throw new SQLException("Source batch changed", "P0004");
-                    checkRunning(lock);
+                    checkRunning();
                     store.complete(target, batch.batch(), counts.written(), counts.skipped(), task.keyed() ? strategy.skipLimit() : 0);
                     committedCall = true;
                     target.commit();
@@ -394,20 +379,8 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         }
     }
 
-    private void checkRunning(TableLock lock) throws SQLException {
+    private void checkRunning() throws SQLException {
         if (closed || Thread.currentThread().isInterrupted()) throw new SQLException("Migration stopped", "57014");
-        // A single JDBC guard connection must not be used concurrently.
-        synchronized (lock) { lock.check(); }
-    }
-
-    private String fingerprint(MigrationPlan plan, TableTask task) {
-        try {
-            String material = endpointIdentity + "\n" + task.selectSql() + "\n" + task.insertSql() + "\n"
-                    + task.targetTable() + "\n" + task.primaryKey() + "\n" + task.fields() + "\n" + task.mode()
-                    + "\n" + task.sequence() + "\n" + task.batchSize() + "\n" + plan.strategy().skipLimit()
-                    + "\n" + plan.strategy().maxLobSize();
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(material.getBytes(StandardCharsets.UTF_8)));
-        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
 
     @Override public void close() {
