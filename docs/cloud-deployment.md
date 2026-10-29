@@ -14,7 +14,7 @@
 
 ## Oracle 源连接
 
-宿主引入 `com.oracle.database.jdbc:ojdbc11`，按数据库和驱动版本核对支持矩阵。源账号仅授予必要表的 SELECT 权限；不需要创建对象、更新表或读取源序列 NEXTVAL。
+组件已通过运行时依赖提供 `com.oracle.database.jdbc:ojdbc11`，按数据库和驱动版本核对支持矩阵。源账号仅授予必要表的 SELECT 权限；不需要创建对象、更新表或读取源序列 NEXTVAL。
 
 示例环境变量（主机、端口、服务名、DN 必须替换为 DBA 提供的值）：
 
@@ -28,7 +28,7 @@ Oracle Thin 支持 TCPS、信任库及服务端身份匹配；参数细节以 [O
 
 ## PostgreSQL 目标连接
 
-宿主引入 `org.postgresql:postgresql`。本地/DEV 普通账号密码路径直接复用现有 YAML。目标 URL 示例：
+组件已通过运行时依赖提供 `org.postgresql:postgresql`。本地/DEV 普通账号密码路径直接复用现有 YAML。目标 URL 示例：
 
 ```text
 TARGET_JDBC_URL=jdbc:postgresql://postgres.example.internal:5432/dev?sslmode=verify-full&sslrootcert=/run/certs/postgres-ca.pem
@@ -40,7 +40,7 @@ TARGET_JDBC_URL=jdbc:postgresql://postgres.example.internal:5432/dev?sslmode=ver
 
 ## IAM：当前边界和接入方案
 
-组件现在只接收宿主 DataSource。宿主负责解密/IAM、JDBC驱动、连接池和超时，完整实现位置与新物理连接动态取token示例见 [宿主数据源与凭据](database-credentials.md)。不能在宿主尚未启动时依赖其普通 Spring Bean 自动注入；启动前使用可独立初始化的 Java 工厂。真实 IAM 仍需云端验收。
+组件现在只接收宿主 DataSource。宿主负责解密/IAM、连接池和超时；Oracle/PostgreSQL驱动由组件依赖提供，完整实现位置与新物理连接动态取token示例见 [宿主数据源与凭据](database-credentials.md)。不能在宿主尚未启动时依赖其普通 Spring Bean 自动注入；启动前使用可独立初始化的 Java 工厂。真实 IAM 仍需云端验收。
 
 ECS **task role** 用于应用的 AWS API 权限，**task execution role** 用于拉取镜像、日志及任务配置中的秘密注入；不要混用。依据 [AWS ECS IAM 角色说明](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-iam-roles.html) 配置最小权限，不在镜像中保存长期 access key。
 

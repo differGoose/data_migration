@@ -4,7 +4,7 @@
 
 ## 普通密码
 
-在宿主的工厂中创建连接池（宿主需自行添加 Hikari 和驱动依赖）：
+在宿主的工厂中创建连接池（宿主需自行添加 Hikari；Oracle/PostgreSQL驱动由组件运行时依赖提供）：
 
 ```java
 var source = new com.zaxxer.hikari.HikariDataSource();
@@ -94,6 +94,6 @@ pool.setMaximumPoolSize(4);
 pool.setMinimumIdle(0);
 ```
 
-池复用已连接会话时不会重新取 token；新建物理连接时调用底层 DataSource。宿主自行添加 AWS SDK rds、认证依赖及 JDBC 驱动。使用真实 RDS hostname/port 签名，配置正确的数据库 IAM 权限、AWS 角色和 TLS 主机名验证。JDBC URL 不放用户名、密码或 token，以免覆盖 DataSource 提供的认证值。
+池复用已连接会话时不会重新取 token；新建物理连接时调用底层 DataSource。宿主自行添加 AWS SDK rds 和认证依赖；Oracle/PostgreSQL JDBC驱动已提供。使用真实 RDS hostname/port 签名，配置正确的数据库 IAM 权限、AWS 角色和 TLS 主机名验证。JDBC URL 不放用户名、密码或 token，以免覆盖 DataSource 提供的认证值。
 
 这些样例说明宿主的实现位置，不代表本项目已经通过真实 AWS 联调。组件不计算端点身份摘要；同 job 恢复期间由宿主保证实际数据源、命名空间和迁移配置不变。若连接失败，先独立测试宿主 DataSource，再测试迁移；不要在错误日志中输出原始口令、token 或完整连接配置。

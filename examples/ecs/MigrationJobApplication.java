@@ -1,4 +1,4 @@
-// Copy into a HOST project with its own Hikari + JDBC dependencies.
+// Copy into a HOST project with its own Hikari dependency; Oracle/PostgreSQL runtime drivers come from the module.
 package example.migrationjob;
 import com.datamigration.api.MigrationRunner;
 import com.zaxxer.hikari.HikariDataSource;

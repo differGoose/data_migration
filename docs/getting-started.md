@@ -1,6 +1,6 @@
 # 宿主接入：在应用启动前完成迁移
 
-本模块只执行迁移。数据库地址、账号、解密、IAM、驱动与连接池都由宿主负责。先调用迁移，再执行正式宿主的 `SpringApplication.run`。
+本模块只执行迁移。数据库地址、账号、解密、IAM与连接池由宿主负责；组件提供Oracle/PostgreSQL运行时驱动依赖。先调用迁移，再执行正式宿主的 `SpringApplication.run`。
 
 ## 1. 引入依赖并准备对象
 
@@ -14,7 +14,7 @@
 </dependency>
 ```
 
-宿主使用 Boot 4.1.1 依赖管理、JDK 17，并添加所用数据库的 JDBC 驱动。若用 Hikari，宿主另行添加 `com.zaxxer:HikariCP`；组件不会传递这个生产依赖。源账号只读业务数据，目标账号具备业务 INSERT、审计读写和锁权限。需要重导或序列校准时再授予对应权限。
+宿主使用 Boot 4.1.1 依赖管理、JDK 17，Oracle/PostgreSQL JDBC驱动已由组件运行时依赖提供；其他数据库需自行添加驱动。若用 Hikari，宿主另行添加 `com.zaxxer:HikariCP`；组件不会传递这个生产依赖。源账号只读业务数据，目标账号具备业务 INSERT、审计读写和锁权限。需要重导或序列校准时再授予对应权限。
 
 目标表与审计表人工创建。[PostgreSQL 审计 SQL](../src/main/resources/db/postgresql/migration-audit.sql) 在目标库执行。字段类型和长度按源数据设计，例如：
 
@@ -57,7 +57,7 @@ fields 顺序对应 INSERT 的问号；source-column 对应 SELECT 列标签。b
 
 ## 3. 宿主创建 DataSource
 
-下面代码属于宿主项目，可用你们已有的数据源工厂替代。需自行引入 Hikari 和实际驱动：
+下面代码属于宿主项目，可用你们已有的数据源工厂替代。需自行引入 Hikari；Oracle/PostgreSQL驱动已提供：
 
 ```java
 import com.zaxxer.hikari.HikariDataSource;

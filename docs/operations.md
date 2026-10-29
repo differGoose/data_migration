@@ -60,7 +60,7 @@ batch_no=0 是表汇总，正数是事务块，不要把汇总和批次一起 SU
 | --- | --- |
 | 宿主启动了，但没有迁移 | 组件不自动执行迁移；确认 main 中是否在 .run() 前调用 Runner，或容器内业务是否实际调用 migrate() |
 | 找不到 MigrationService Bean | 确认依赖在运行 classpath，宿主启用 Boot 自动配置；基线是 Boot 4.1.1 |
-| 找不到驱动类 | 驱动须由宿主添加；本组件测试依赖不传递为宿主运行驱动 |
+| 找不到驱动类 | Oracle/PostgreSQL驱动已随组件传递；检查依赖排除、scope及打包结果，其他数据库需宿主添加驱动 |
 | 找不到 migration-local.yml | 检查进程工作目录和 spring.config.import；IDE、容器的相对目录可能不同 |
 | 配置缺失、字段无法绑定 | 对照模板检查拼写、环境变量和缩进；组件严格拒绝未知迁移配置字段 |
 | 连接预算不足 | 按同时执行的表组合计算 source 和 target 连接数，或降低表/worker 并发 |
