@@ -1,10 +1,10 @@
-# 使用你自己的 DataSource 做真实数据库 E2E
+# Real database E2E with your own DataSources
 
-测试接收你提供的可用源/目标 DataSource，读取迁移规则，调用正式 `MigrationRunner`，再校验数据与审计。它不创建真实数据库、不造数、不处理数据源的创建细节。没有配置外部数据源时，main/Maven明确失败，不回退到H2。
+Tests accept your usable source/target DataSources, load migration rules, call the production `MigrationRunner`, and validate data/auditing. They do not create real databases, seed data, or implement DataSource creation. main/Maven explicitly fail without external DataSource configuration; there is no H2 fallback.
 
-这些方法位于本仓库 `src/test/java`，属于测试设施，不打进生产JAR。请在本仓库test classpath中运行，或将相关测试设施引入宿主测试源码。H2本地测试继续保留，和真实数据库测试不冲突。
+These methods are test fixtures under this repository's `src/test/java`, not part of the production JAR. Run with this repository's test classpath or include the relevant fixtures in your host test sources. Independent local H2 tests remain available alongside real database testing.
 
-## 方式一：直接传入你已有的两个对象
+## Option 1: pass two existing objects directly
 
 ```java
 import com.datamigration.support.DatabaseE2E;
@@ -17,15 +17,15 @@ var report = DatabaseE2E.run(
 System.out.println(report.directory());
 ```
 
-两个4表示各自可供迁移使用的连接容量，不会调整池大小。方法只借用/归还连接，不关闭两个DataSource；创建与关闭仍由调用方管理。
+The two 4 values declare available migration connection capacities; they do not resize pools. The method only borrows/returns connections and does not close either DataSource. The caller retains creation and shutdown ownership.
 
-复制 [真实迁移模板](../examples/e2e/oracle-postgresql.yml) 到 e2e-local.yml，替换表名、字段、job-id及查询范围。直接传对象时，删除模板中的 e2e.configuration-classes 占位项（无需提供配置类）；连接地址、账号等不需要再给这个方法。
+Copy the [real migration template](../examples/e2e/oracle-postgresql.yml) to e2e-local.yml and replace tables, fields, job-id, and query ranges. For direct objects, remove e2e.configuration-classes (no configuration class is needed). Connection addresses and accounts need not be passed separately to this method.
 
-方法执行“迁移 → 校验 → 同配置同job再次执行 → 校验数据与审计未重复累计”。正常返回包含执行结果、审计计数及报告目录；迁移失败传播 MigrationException，校验失败抛断言错误，保留已有结果。修复原因后仍调用同一方法和同一配置即可恢复。
+The method runs migration -> validation -> same-job/same-configuration migration again -> validation that data/audit totals did not accumulate. A normal return contains results, audit counts, and a report directory. MigrationException propagates on migration failure; validation failures throw assertion errors and preserve results. Fix the cause and call the same method/configuration to recover.
 
-## 配置分成两部分
+## Two configuration sections
 
-`data-migration` 仍是正式迁移配置，job-id、表名、batch-size、模式等含义完全相同。
+`data-migration` remains production migration configuration with the same job-id, table, batch-size, and mode semantics.
 
 ```yaml
 e2e:
@@ -33,61 +33,61 @@ e2e:
   phase-timeout: 180s
   report-directory: target/e2e-reports
   validation:
-    customer:  # 与 tables[].name 一致
+    customer:  # Must match tables[].name.
       source-sql: SELECT ID, NAME, AMOUNT FROM BUSINESS.CUSTOMER ORDER BY ID
       target-sql: SELECT ID, NAME, AMOUNT FROM MIGRATION_TEST.CUSTOMER_COPY ORDER BY ID
 ```
 
-source-sql 描述**预期最终数据**，target-sql 查询对应目标范围。两端列顺序与fields一致，并按同样的唯一键顺序排序。测试进行流式行数/字段摘要比对，不保存业务行。若允许跳过坏数据，source-sql应排除预期跳过的记录；迁移select-sql仍保持真实范围。审计校验使用迁移完整源范围，核对 committed+skipped 以及各成功批次合计。
+source-sql describes the **expected final data**; target-sql selects the corresponding target range. Both use fields order and the same deterministic unique-key ordering. Tests stream counts/field digests without saving business rows. If skips are allowed, exclude expected skipped rows from source-sql while retaining the actual range in migration select-sql. Audit validation uses the full migration range to verify committed+skipped and successful batch totals.
 
-不额外要求目标表为空，也不强制追加模式或skip-limit=0。新job、重复job、主键冲突、断点恢复及明确配置的CLEAR_AND_REIMPORT均由正式引擎处理。注意：该模式本来就会DELETE整张目标表；测试不会在引擎之外另做清理。源数据在执行和校验期间必须稳定。
+Tests add no empty-target requirement, mandatory append mode, or skip-limit=0 restriction. New/repeated jobs, key conflicts, checkpoints, and explicit CLEAR_AND_REIMPORT follow the production engine. That mode already DELETEs the entire target table; the test performs no additional cleanup outside the engine. Source data must remain stable during execution and validation.
 
-phase-timeout约束普通E2E执行及其取消请求，查询也设置JDBC超时。调用方仍须给DataSource设置有限的连接/网络读取超时；Java无法安全强杀一个不响应中断的驱动调用，资源回收可能需要等待驱动返回。
+phase-timeout bounds ordinary E2E execution and cancellation requests; queries also use JDBC timeouts. The caller still must configure finite connection/network-read timeouts on DataSources. Java cannot safely kill a driver call that ignores interruption, so cleanup may wait for the driver to return.
 
-## 只模拟宿主调用：使用正式配置，不做额外E2E校验
+## Simulate only the host call: production configuration without extra E2E validation
 
-打开 [HostMigrationE2EIT](../src/test/java/com/datamigration/e2e/HostMigrationE2EIT.java)。这个测试类模拟宿主创建两个真实数据库连接池，直接调用正式的MigrationRunner.migrate，不调用DatabaseE2E，也不要求e2e配置段、校验SQL或外部Spring配置类。
+Open [HostMigrationE2EIT](../src/test/java/com/datamigration/e2e/HostMigrationE2EIT.java). This test simulates host creation of two real connection pools and directly calls production MigrationRunner.migrate. It does not call DatabaseE2E and requires no e2e section, validation SQL, or external Spring configuration class.
 
-源、目标的JDBC URL、用户名、密码均留空，在本地填写六个常量，不要提交真实连接信息。将正式迁移配置放在src/test/resources/application.yml；测试默认通过classpath:application.yml加载。其中只需data-migration描述job-id、表映射和策略，格式与正式宿主一致，参考 [正式配置模板](../examples/migration.yml)。使用其他文件名时修改CONFIG_LOCATION。测试不创建数据库、表或源数据，业务表与审计表由使用者提前准备；写入和显式重导完全遵循正式引擎行为。
+Source/target JDBC URLs, usernames, and passwords are blank. Fill six constants locally and do not commit real details. Put production configuration in src/test/resources/application.yml; the test loads classpath:application.yml. Only data-migration rules for job-id, mappings, and strategies are required, using the [production template](../examples/migration.yml). Change CONFIG_LOCATION for another filename. Users prepare business/audit tables and source data; writes and explicit reimports retain production engine behavior.
 
 ```powershell
 mvn -B -ntp test-compile failsafe:integration-test failsafe:verify "-Dit.test=HostMigrationE2EIT" "-Dhost.e2e.enabled=true"
 ```
 
-IDE为JUnit运行配置添加VM参数 `-Dhost.e2e.enabled=true` 后运行测试方法。默认跳过真实数据库入口；显式启用但未填写连接信息会报错，不回退到H2。两个池各4个连接，需要更多连接时同步调整容量常量；连接和读取超时由宿主按驱动配置。普通模式下迁移异常直接导致测试失败；没有额外的源/目标内容比对或自动重复执行，重复运行仍按正式job-id恢复逻辑处理。
+In the IDE, add VM argument `-Dhost.e2e.enabled=true` to the JUnit run configuration and run the method. Real database execution is skipped by default. Explicit opt-in with missing connection settings fails, with no H2 fallback. Each pool has four connections; adjust capacity constants if migration needs more. The host configures driver connect/read timeouts. In ordinary mode, migration exceptions fail the test directly. There is no extra content comparison or automatic repetition; repeated runs follow production job-id recovery semantics.
 
-前文DatabaseE2E.run和下文ConfiguredDatabaseE2EIT仍是额外数据校验入口，才需要e2e配置。仅模拟真实宿主调用时，使用本节的HostMigrationE2EIT即可。
+DatabaseE2E.run above and ConfiguredDatabaseE2EIT below remain additional validation entries that require e2e configuration. Use HostMigrationE2EIT from this section to simulate only a real host call.
 
-需要迁移中手动断开或恢复source/target时，为同一测试额外设置 `-Dhost.e2e.manual=true`，通过本机控制页操作。仍只使用正式迁移配置，不要求e2e字段。代理地址、URL模板和完整步骤见 [手动代理迁移](manual-host-migration.md)。
+To manually cut/restore source or target during migration, also set `-Dhost.e2e.manual=true` on the same test and use the local control page. Only production migration configuration is needed, with no e2e fields. See [manual proxy migration](manual-host-migration.md) for addresses, URL templates, and complete steps.
 
-## 方式二：main 或 Maven 运行
+## Option 2: run main or Maven
 
-因为独立进程拿不到你当前JVM里的Java对象，需提供一个仅注册源/目标DataSource的Spring配置类。它只是把你已有的数据源交出来，不需要实现新的接口。示例见 [配置类模板](../examples/e2e/ExternalDataSourcesConfiguration.java)，替换其中 YourExistingDataSources。数据源Bean必须带 `@MigrationSource(capacity=...)`、`@MigrationTarget(capacity=...)`，各一个；其他无标记DataSource不会被选中。
+A separate process cannot access Java objects in your current JVM. Supply a Spring configuration class that only registers source/target DataSources, exposing existing DataSources without implementing a new interface. See the [configuration template](../examples/e2e/ExternalDataSourcesConfiguration.java) and replace YourExistingDataSources. Each role must have exactly one bean marked `@MigrationSource(capacity=...)` or `@MigrationTarget(capacity=...)`; unrelated DataSources are ignored.
 
-配置类位于test classpath；不要传整个业务应用启动类。测试只加载你显式指定的类，不默认导入H2宿主。Bean的销毁由该测试宿主上下文按你的配置负责；如果是借来的共享对象，必须显式写 `@Bean(destroyMethod="")` 禁用Spring默认的close推断；模板采用这种方式。如果该测试宿主自己创建并拥有连接池，则由该配置类明确声明 `destroyMethod="close"` 回收。
+Put the configuration class on the test classpath; do not pass the entire business application entry class. Tests load only explicitly named classes and do not import the H2 host by default. The test-host context manages bean destruction according to your declaration. For borrowed shared objects, use `@Bean(destroyMethod="")` to disable Spring's inferred close, as in the template. If that test host creates and owns pools, explicitly use `destroyMethod="close"` to release them.
 
 ```yaml
 e2e:
   configuration-classes: [your.project.ExternalDataSourcesConfiguration]
 ```
 
-可以使用模板中的 E2E_DATASOURCE_CONFIG_CLASS 环境变量。其他环境变量 E2E_JOB_ID、E2E_ID_MIN、E2E_ID_MAX 由模板引用。真实目标业务表/审计表及权限需提前准备。
+You may use E2E_DATASOURCE_CONFIG_CLASS from the template. The template also references E2E_JOB_ID, E2E_ID_MIN, and E2E_ID_MAX. Prepare real target business/audit tables and permissions in advance.
 
-在仓库根目录执行（PowerShell保留引号）：
+Run from the repository root (preserve quoting in PowerShell):
 
 ```powershell
 mvn -B -ntp verify "-Dit.test=ConfiguredDatabaseE2EIT" "-De2e.config=file:./e2e-local.yml"
 ```
 
-Oracle/PostgreSQL驱动已默认提供，不需要额外Maven profile；测试不会准备数据库。默认 `mvn clean verify` 跳过这个入口，不连接真实数据库。
+Oracle/PostgreSQL drivers are included by default, with no extra Maven profile. Tests do not prepare databases. Default `mvn clean verify` skips this entry and does not connect to real databases.
 
-IDE中运行 `com.datamigration.support.DatabaseE2E.main`，程序参数填写一个或多个配置位置，例如：
+In the IDE, run `com.datamigration.support.DatabaseE2E.main` with one or more configuration locations as program arguments, for example:
 
 ```text
 file:./e2e-local.yml
 ```
 
-或在PowerShell通过Java运行同一个main：
+Or launch the same main through Java in PowerShell:
 
 ```powershell
 mvn -B -ntp test-compile dependency:build-classpath "-Dmdep.outputFile=target/test-classpath.txt" "-DincludeScope=test"
@@ -95,28 +95,28 @@ $testClasspath = "target/test-classes;target/classes;" + (Get-Content target/tes
 java -cp $testClasspath com.datamigration.support.DatabaseE2E file:./e2e-local.yml
 ```
 
-Java方法和main支持多个配置位置，后加载覆盖前者。Maven e2e.config使用逗号分隔位置。Spring列表整体替换，不按任务名合并。main失败时返回非零退出码，只输出脱敏失败提示。
+Java methods and main accept multiple locations, with later files overriding earlier ones. Maven e2e.config uses comma-separated locations. Spring replaces lists as a whole rather than merging tasks by name. main returns a nonzero exit code on failure and prints only a redacted failure message.
 
-## 普通迁移与故障场景
+## Ordinary migration and fault scenarios
 
-scenario支持MIGRATION、SOURCE_OUTAGE、TARGET_OUTAGE、APP_BEFORE_COMMIT、APP_AFTER_COMMIT。故障场景使用main/Maven配置入口，不接受将当前JVM的数据源对象传到子进程。它们复用父进程TCP代理和独立宿主JVM；每个子进程仍从外部配置类取得DataSource，通过正式Runner执行。
+scenario supports MIGRATION, SOURCE_OUTAGE, TARGET_OUTAGE, APP_BEFORE_COMMIT, and APP_AFTER_COMMIT. Fault scenarios use configured main/Maven entries, not current-JVM DataSource objects passed into child processes. They reuse parent TCP proxies and independent host JVMs. Each child gets DataSources from external configuration and executes through the production Runner.
 
-加载 [故障配置](../examples/e2e/fault.yml) 作为第二份文件：
+Load the [fault configuration](../examples/e2e/fault.yml) as the second file:
 
 ```powershell
 mvn -B -ntp verify "-Dit.test=ConfiguredDatabaseE2EIT" "-De2e.config=file:./e2e-local.yml,file:examples/e2e/fault.yml"
 ```
 
-配置两端真实upstream地址和端口。你提供的数据源必须把实际连接路由到本机代理端口：环境属性 `e2e.source-proxy.port` / `e2e.target-proxy.port` 在创建测试数据源前由父进程分配。配置类可从Environment读取它们。建议Bean使用@Lazy，避免预读场景时尝试建立连接。测试不替你修改DataSource内部连接地址。
+Configure real upstream hosts/ports for both endpoints. Your DataSources must route actual connections through local proxy ports. The parent allocates `e2e.source-proxy.port` / `e2e.target-proxy.port` before DataSource creation; your class can read them from Environment. Prefer @Lazy beans to avoid connections while previewing scenario settings. Tests do not rewrite DataSource connection addresses for you.
 
-测试检查两端实际经过代理后才允许断网注入。代理端口只用于真实路由，不计算身份摘要。故障子进程完全结束后才启动恢复子进程；不测试跨进程并行接管。
+Tests verify both endpoints actually use the proxies before injecting outages. Proxy ports are routing details only, not identity digests. Recovery children start only after faulted children fully exit. Cross-process parallel takeover is not tested.
 
-触发任务需要单worker以确定提交顺序。trigger-commit表示本次执行的第几次业务提交，不包括审计提交；已有部分结果时继续本次剩余工作，不重置job。已经成功的触发任务直接进行恢复/重复执行验证，报告faultTriggered=false、alreadyCompleted=true；若剩余数据在触发点之前就完成，也如实报告未注入故障，不冒称已覆盖故障。
+The trigger task needs a single worker for deterministic commit ordering. trigger-commit is the business commit number in this execution, excluding audit commits. Partial results continue remaining work without resetting the job. A successful trigger task goes straight to recovery/repetition validation, reporting faultTriggered=false and alreadyCompleted=true. If remaining work completes before the trigger, the report also honestly states no fault was injected rather than claiming fault coverage.
 
-## 报告和验收边界
+## Reports and acceptance boundaries
 
-每次保存独立运行目录。manifest.properties和result.properties只记录运行编号、job、场景、状态、数量及验证结果，不输出SQL、口令或业务行。故障子进程日志和runtime.properties为本地控制资料，包含必要路由信息，勿公开提交；运行时SQL映射只在内存适配，不写入控制文件。
+Each invocation creates a separate run directory. manifest.properties and result.properties record only run IDs, job, scenario, status, counts, and validation outcomes, not SQL, passwords, or business rows. Child logs and runtime.properties are private local control material containing necessary routing details; do not publicly commit them. Runtime SQL adaptation stays in memory, not control files.
 
-默认本地验证使用调用方准备的H2对象/服务器验证接口契约及四类故障，不代表真实Oracle/PostgreSQL已联调。真实验收必须由你提供实际可用的DataSource及稳定数据范围执行。
+Default local checks use caller-prepared H2 objects/servers to validate API contracts and four fault types, not real Oracle/PostgreSQL integration. Actual acceptance requires your usable DataSources and stable source range.
 
-执行与恢复均使用 JDK 17；同 job 的迁移规则、实际数据源和源范围保持不变。普通直接对象入口同样受 JVM 全局许可约束。审计结构见 [审计设计](audit.md)。
+Execution and recovery both use JDK 17. Preserve migration rules, actual DataSources, and source ranges for the same job. The ordinary direct-object entry also obeys the JVM-wide permit. See [audit design](audit.md) for the schema.

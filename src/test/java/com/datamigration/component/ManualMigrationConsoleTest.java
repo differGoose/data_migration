@@ -40,7 +40,7 @@ class ManualMigrationConsoleTest {
                  }
              })) {
             try {
-                assertThat(request(console, "GET", "").body()).contains("执行 / 续跑");
+                assertThat(request(console, "GET", "").body()).contains("Run / Resume");
                 assertThat(request(console, "POST", "finish").statusCode()).isEqualTo(409);
                 assertThat(request(console, "GET", "source/cut").statusCode()).isEqualTo(405);
                 var wrong = URI.create(console.url()).resolve("/status");

@@ -1,79 +1,79 @@
-# 审计表：job、事务块与恢复边界
+# Audit table: jobs, transaction blocks, and recovery boundaries
 
-审计表是目标数据库中的持久化进度。它与业务数据一起提交，进程退出后仍能判断哪些范围已经完成。执行协调使用 JVM 内存许可，不占审计记录。
+The audit table persists progress in the target database. Checkpoints commit with business data, so completed ranges can still be identified after process exit. Execution coordination uses a JVM memory permit and does not create audit records.
 
-## job-id 与任务名
+## job-id and task names
 
-`job-id` 是一轮迁移的稳定编号，例如 `customer-and-orders-import`。这轮迁移的 customer 和 orders 共用这个 job-id，分别用 `tables[].name` 区分任务。不是每张表都要配置一个 job-id。
+`job-id` is a stable identifier for a migration job, such as `customer-and-orders-import`. The customer and orders tasks share that job-id and are distinguished by `tables[].name`. Each table does not need its own job-id.
 
-主键为 `(job_id, task_name, batch_no)`：
+The primary key is `(job_id, task_name, batch_no)`:
 
-- `batch_no=0`：该表的汇总和阶段状态，一张表一条。
-- `batch_no>0`：该表的事务块，从1编号；每块保存范围、预期数量及提交结果。
+- `batch_no=0`: table summary and phase state, one record per table.
+- `batch_no>0`: table transaction blocks numbered from 1; each stores its range, expected count, and commit result.
 
-同 job、同任务重启会读取这些记录，成功表直接返回，未完成表恢复未成功块。每次 API 调用的 runId 只用于区分执行报告，不影响恢复。换新 job-id 表示新工作；默认追加模式不清目标，也不根据目标已有行去重。
+Restarting the same job/task reads these records: successful tables return immediately, while unfinished tables resume unsuccessful blocks. Each API invocation's runId distinguishes execution reports and does not affect recovery. A new job-id means new work; default append mode neither clears targets nor deduplicates against existing rows.
 
-新版不生成 `__table_lock__` 内部记录，不保存 LOCK 标记、执行令牌或 fingerprint。恢复时配置、实际数据源和源范围必须不变，由调用方保证；组件不检测配置漂移。需要修改迁移规则时，应另行规划新工作及目标数据处理，不能直接复用旧检查点。
+The new version creates no internal `__table_lock__` records and stores no LOCK marker, ownership token, or fingerprint. The caller must keep configuration, actual DataSources, and source ranges unchanged during recovery; configuration drift is not detected. To change migration rules, plan new work and target-data handling instead of reusing old checkpoints.
 
-## 每个字段有什么用
+## Field reference
 
-| 字段 | 含义 |
+| Field | Meaning |
 | --- | --- |
-| job_id / task_name / batch_no | 一轮工作、表任务和事务块的复合主键 |
-| target_table | 已解析的目标表名称，方便定位任务 |
-| state | PLANNED待执行、RUNNING执行中、SUCCEEDED完成；汇总还可为FINALIZING、FAILED、COMMIT_UNKNOWN或FINALIZATION_FAILED |
-| lower_key / upper_key | 有键事务块的键范围；下界不含、上界包含；保存带 JDBC 类型的 JSON，不是拼接 SQL |
-| expected_rows | 该事务块应该读取的源行数，包含允许跳过的行；汇总行不使用此字段表示总量 |
-| committed_rows | 块内已提交写入数；汇总行为所有已成功块的累计数 |
-| skipped_rows | 已提交的跳过数，按表累计受skip-limit约束 |
-| processed_rows | 块成功时为读取数；无键汇总可记录尚未提交的处理进度，不能当作已入库数 |
-| retries | 已记录的瞬时重试次数；汇总累计，批次按各自次数记录 |
-| total_rows | 汇总行中准备阶段的完整源查询行数；恢复检查源行数是否变化 |
-| prepared | 汇总标志：已完成准备；有键重导的DELETE与该标志一起提交，恢复不再重复清表 |
-| planning_complete | 汇总标志：有键范围已全部规划；仍需完成已有待执行块 |
-| data_complete | 汇总标志：数据阶段已完成，之后只处理序列等收尾 |
-| error_code | 脱敏错误类别、SQLState或厂商码，不保存业务行及原始异常消息 |
-| started_at / updated_at | 记录首次创建及最近更新的时间 |
+| job_id / task_name / batch_no | Composite primary key identifying the job, table task, and transaction block |
+| target_table | Resolved target-table name for locating the task |
+| state | PLANNED is pending, RUNNING is in progress, SUCCEEDED is complete; summaries may also be FINALIZING, FAILED, COMMIT_UNKNOWN, or FINALIZATION_FAILED |
+| lower_key / upper_key | Keyed block boundaries, lower exclusive and upper inclusive; typed JSON values, not concatenated SQL |
+| expected_rows | Source rows expected in this block, including allowed skips; the summary does not use this field for the total |
+| committed_rows | Committed writes in the block; the summary accumulates all successful blocks |
+| skipped_rows | Committed skips, subject to the cumulative per-table skip-limit |
+| processed_rows | Rows read when a block succeeds; a keyless summary may record uncommitted processing progress, not committed data |
+| retries | Recorded transient retries; accumulated in the summary and counted separately per batch |
+| total_rows | Full source-query count recorded during summary preparation; checked for source-count changes on recovery |
+| prepared | Summary flag for completed preparation; a keyed reimport DELETE commits with this flag and is not repeated on recovery |
+| planning_complete | Summary flag indicating all keyed ranges are planned; existing pending blocks must still finish |
+| data_complete | Summary flag indicating the data phase is complete; only sequence or other finalization remains |
+| error_code | Redacted error category, SQLState, or vendor code; no business rows or raw exception messages |
+| started_at / updated_at | Record creation time and latest update time |
 
-阶段标志主要用于汇总行。无键表只有一个整表块，不通过planning_complete决定是否成功。异常时批次可能保留PLANNED或RUNNING，恢复以未SUCCEEDED的持久化块为准，不根据最后一次日志推测。
+Phase flags primarily apply to summaries. A keyless table has one whole-table block and does not use planning_complete to determine success. After errors, blocks may remain PLANNED or RUNNING. Recovery uses persisted blocks that are not SUCCEEDED, rather than inferring progress from the last log line.
 
-统计提交总量时只查询 `batch_no=0`，或只汇总正数块；不能将两者一起SUM，否则重复计数。processed_rows并不意味着事务已提交。
+To count committed rows, query only `batch_no=0` or sum only positive batch numbers. Do not SUM both together, which double-counts rows. processed_rows does not imply a committed transaction.
 
-## 连续 ID 示例：为什么首批下界为空
+## Consecutive ID example: why the first lower bound is empty
 
-源ID为1～2500，batch-size=1000：
+Source IDs are 1 through 2500, with batch-size=1000:
 
-| batch_no | lower_key（示意） | upper_key（示意） | 实际范围 | expected_rows |
+| batch_no | lower_key (illustrative) | upper_key (illustrative) | Actual range | expected_rows |
 | --- | --- | --- | --- | --- |
 | 1 | NULL | 1000 | ID <= 1000 | 1000 |
 | 2 | 1000 | 2000 | ID > 1000 AND ID <= 2000 | 1000 |
 | 3 | 2000 | 2500 | ID > 2000 AND ID <= 2500 | 500 |
 
-首批NULL表示没有下界条件，不代表要读取主键为NULL的行；有键源查询会预检键非空、唯一。实际BIGINT边界保存类似 `[{"jdbcType":-5,"text":"1000"}]`，组件恢复为对应JDBC类型绑定查询。
+The first NULL means no lower-bound condition, not a request to read null primary keys. Keyed source queries preflight keys for non-nullness and uniqueness. An actual BIGINT boundary is stored as `[{"jdbcType":-5,"text":"1000"}]` and restored to the corresponding JDBC type for parameter binding.
 
-范围边界从排序后的实际键读取，不是每次给ID加1000。源ID若是10、90、300，batch-size=2，第一个块为 `(NULL,90]`，第二个为 `(90,300]`。
+Boundaries come from actual sorted keys, not by adding 1000 to an ID. With source IDs 10, 90, and 300 and batch-size=2, the first block is `(NULL,90]` and the second is `(90,300]`.
 
-## 联合键示例
+## Composite-key example
 
-主键配置 `[TENANT_ID, ID]`，源排序结果为 `(1,10)、(1,20)、(2,5)、(2,9)`，batch-size=2：
+With primary-key `[TENANT_ID, ID]`, sorted rows `(1,10), (1,20), (2,5), (2,9)`, and batch-size=2:
 
-- 第一块：没有下界，上界 `(1,20)`，读取前两行。
-- 第二块：`((1,20),(2,9)]`，读取后两行。
+- First block: no lower bound, upper bound `(1,20)`; reads the first two rows.
+- Second block: `((1,20),(2,9)]`; reads the last two rows.
 
-联合键使用字典序。第二块下界条件相当于 `TENANT_ID > 1 OR (TENANT_ID = 1 AND ID > 20)`；上界同时约束结果不能超过 `(2,9)`。键值通过参数绑定；JSON数组中的顺序与primary-key一致。
+Composite keys use lexicographic order. The second block's lower condition is equivalent to `TENANT_ID > 1 OR (TENANT_ID = 1 AND ID > 20)`; its upper condition also prevents results beyond `(2,9)`. Keys are bound parameters, and JSON array order matches primary-key.
 
-并行时第二块可能先成功，第一块失败。如果只保存“最大ID”或最大联合键，重启从该位置继续就会漏掉第一块。保存各块的范围及成功状态后，重启仍能找到前面的缺口，只重做未成功块。
+With parallel workers, block 2 may succeed before block 1 fails. Saving only the maximum ID or composite key and restarting after it would miss block 1. Persisting each block's range and status preserves those earlier gaps, allowing recovery to redo only unsuccessful blocks.
 
-无键表的lower/upper均为空：整个源查询属于一个目标事务。batch-size只影响fetch提示和JDBC batch，不能提前提交；失败整表回滚，下次从头执行。
+Keyless tables have empty lower/upper bounds: the full source query is one target transaction. batch-size affects fetch hints and JDBC batches, not early commits. Failure rolls back the whole table, and the next attempt starts from the beginning.
 
-## 为什么仍保留数据库行锁
+## Why database row locks remain
 
-JVM许可解决一次执行与另一次执行的排斥。一次执行内部的多个worker仍会同时提交，批次行锁和汇总行锁用于保护检查点、累计数量与共享跳过额度；提交响应丢失时也要等待原事务结束再核实。它们是事务锁，会随提交或回滚释放，不需要额外的执行锁行。
+The JVM permit excludes overlapping executions. Within one execution, multiple workers still commit concurrently. Batch and summary row locks protect checkpoints, cumulative counts, and shared skip budgets. When a commit response is lost, verification also waits for the original transaction to finish. These transactional locks release on commit or rollback and require no separate execution-lock records.
 
-许可只在工作线程结束、事务和连接清理完成后释放。不同Runner或Spring Context重叠调用立即报错。不同进程之间没有协调，部署方必须保证前一进程已结束再启动恢复进程。
+The permit releases only after workers finish and transactions/connections are cleaned up. Overlapping calls from different Runners or Spring contexts fail immediately. Different processes are not coordinated; deployment must ensure the previous process exits before a recovery process starts.
 
-## 建表与版本切换
+## Schema preparation and version changes
 
-DDL：[PostgreSQL](../src/main/resources/db/postgresql/migration-audit.sql)、[H2](../src/main/resources/db/h2/migration-audit.sql)。运行引擎不建表、不修改旧结构，也不转换旧检查点。
+DDL: [PostgreSQL](../src/main/resources/db/postgresql/migration-audit.sql), [H2](../src/main/resources/db/h2/migration-audit.sql). The running engine neither creates tables, alters old schemas, nor converts old checkpoints.
 
-旧版未完成任务先用旧版本完成。新版审计结构由使用者人工准备，建议使用独立的新审计表保留历史；没有未完成任务再切换。不要直接拿仍含必填fingerprint列的旧表运行新版，否则新记录会因缺失该列而插入失败。本地合成测试的建表由测试设施自行负责。
+Finish unfinished old-version jobs with that version first. Users manually prepare the new audit schema; a separate new audit table is recommended to retain history. Switch after no old jobs remain unfinished. Do not run the new version directly against an old table with a mandatory fingerprint column: inserts would fail because that column is no longer supplied. Local synthetic test fixtures manage only their own schemas.

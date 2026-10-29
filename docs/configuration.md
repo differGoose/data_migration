@@ -1,16 +1,16 @@
-# 配置含义与每表批量
+# Configuration and per-table batching
 
-本版 YAML 只包含迁移规则；连接与池由宿主 DataSource 负责。完整入门见 [接入指南](getting-started.md)，模板见 [migration.yml](../examples/migration.yml)。旧的全局批量、连接及启动开关配置已移除，填写旧字段会明确报错，不提供兼容转换。
+YAML in this version contains migration rules only; the host DataSource owns connections and pools. See [host integration](getting-started.md) for a complete introduction and [migration.yml](../examples/migration.yml) for a template. Old global batching, connection, and startup-switch fields have been removed. Supplying them fails explicitly; no compatibility conversion is provided.
 
-## 身份与恢复
+## Identity and recovery
 
-job-id 是整轮工作的稳定编号，同一配置中各表共用它；tables[].name 区分表任务。runId 由每次 API 调用生成，不是恢复身份。相同 job-id/name 重试恢复原进度，换新 job 不会自动清理目标或去重。
+job-id is the stable identifier for the entire job, shared by all tables in one configuration; tables[].name identifies each table task. runId is generated for each API invocation and is not a recovery identity. Retrying the same job-id/name resumes its progress. A new job does not automatically clear targets or deduplicate rows.
 
-恢复期间保持两个实际数据库、命名空间、迁移配置与源数据范围不变。组件不计算端点身份或配置摘要，不自动检测配置变动；同 job 不支持修改规则后续跑。
+Keep both actual databases, namespaces, migration configuration, and source range unchanged during recovery. The component does not compute endpoint identities or configuration digests and does not automatically detect changes. Changing rules and then resuming the same job is unsupported.
 
-## 唯一的行数参数：tables[].batch-size
+## The only row-count parameter: tables[].batch-size
 
-默认 1000，必须 >=1，每表独立：
+Defaults to 1000, must be >=1, and is independent per table:
 
 ```yaml
 data-migration:
@@ -18,57 +18,57 @@ data-migration:
   tables:
     - name: customer
       batch-size: 1000
-      # 其余完整映射……
+      # Remaining mapping configuration...
     - name: orders
       batch-size: 500
-      # 其余完整映射……
+      # Remaining mapping configuration...
 ```
 
-有键表以该值划分事务块，同时作为源 fetch 提示、目标 JDBC batch 上限；一次 migrate 持续到所有表结束。2500 行、batch-size=1000 通常是三个事务块：1000、1000、500。允许跳过的源记录也计入块大小；写入目标的行数可能更少。
+For keyed tables this value defines transaction blocks, the source fetch hint, and the target JDBC batch row limit. One migrate call continues until all tables finish. For 2500 rows and batch-size=1000, blocks are normally 1000, 1000, and 500 rows. Skipped source rows also count toward block size, so fewer rows may be written to the target.
 
-JDBC 驱动可自行决定网络预取；max-batch-bytes、LOB 和尾块也可能让实际 executeBatch 小于此值，但不会因此提前改变事务块提交边界。多个 worker 同时执行时，每个块各自拥有这个上限，并非全表瞬时合计上限。
+JDBC drivers choose their own network prefetch behavior. max-batch-bytes, LOB handling, and tail blocks can make an actual executeBatch smaller than this limit without moving keyed transaction commit boundaries. With multiple workers, each block has its own limit; this is not a combined instantaneous limit for the whole table.
 
-无键表 primary-key: [] 必须 worker-count=1，仍整表一个事务；batch-size 只影响 fetch/batch，不能提前 commit。失败整表回滚，下次从头读；无键表不能跳过坏数据。
+Keyless tables with primary-key: [] require worker-count=1 and retain a single whole-table transaction. batch-size affects fetch/batch behavior only and cannot trigger an early commit. Failure rolls back the entire table; the next attempt starts reading from the beginning. Keyless tables cannot skip bad rows.
 
-## SQL、键和字段
+## SQL, keys, and fields
 
-select-sql 是一个可信管理员提供的 SELECT，insert-sql 是单行 VALUES 模板，参数用 ?。fields 列表的第一项对应第一个问号，source-column 对应查询结果列标签（使用别名时填写别名），target-jdbc-type 使用 BIGINT、VARCHAR、DECIMAL 等 JDBCType 名称，不是修改目标表结构的指令。
+select-sql is a SELECT supplied by a trusted administrator. insert-sql is a single-row VALUES template with ? parameters. The first fields entry corresponds to the first question mark; source-column names the query result label (use the alias when present). target-jdbc-type uses JDBCType names such as BIGINT, VARCHAR, and DECIMAL; it does not alter the target schema.
 
-target-table 必须与 INSERT 的实际目标一致；只支持普通 table 或 schema.table 标识符。primary-key 是查询结果中稳定非空唯一的列，可为业务唯一键；联合键顺序如 [TENANT_ID, ID] 在恢复时不变。SELECT 不支持 CTE、运行时 ? 参数或锁定查询。SQL 校验不代替源账号只读权限。
+target-table must match the actual INSERT target; only plain table or schema.table identifiers are supported. primary-key lists stable, non-null, unique result columns and may represent a business unique key. Keep composite-key order, such as [TENANT_ID, ID], unchanged during recovery. SELECT does not support CTEs, runtime ? parameters, or locking queries. SQL validation does not replace read-only source permissions.
 
-## 并发和连接容量
+## Concurrency and connection capacity
 
-JVM 共享单许可只允许一次 migrate，重叠调用立即失败；该限制覆盖不同 Runner 和 Spring Context，不影响一次调用内部的并发。不同进程须由部署方保证不重叠。
+A shared JVM permit allows only one migrate execution; overlapping calls fail immediately across different Runners and Spring contexts. Concurrency inside one execution is unaffected. Deployment must prevent overlapping processes.
 
-max-concurrent-tables 控制表并发，worker-count 控制单表块并发：
+max-concurrent-tables controls table concurrency; worker-count controls concurrent blocks within a table:
 
-| 单表类型 | 源连接 | 目标连接 |
+| Table type | Source connections | Target connections |
 | --- | --- | --- |
-| 有键，W 个 worker | W+1 | W+1 |
-| 无键，1 个 worker | 1 | 2 |
+| Keyed, W workers | W+1 | W+1 |
+| Keyless, 1 worker | 1 | 2 |
 
-两张单 worker 有键表同时执行，至少源4、目标4。宿主在 builder.source/target 或源/目标注解的 capacity 中声明可供迁移的连接数，组件执行前预检；声明不会自动扩容池。共享业务池还需要额外为业务预留容量。
+Two keyed tables with one worker each require at least source 4 / target 4 when running together. The host declares migration capacity using builder.source/target or the source/target annotations' capacity. The component validates the budget before execution; declarations do not resize pools. Shared business pools need additional capacity reserved for business traffic.
 
-宿主负责池借用超时、JDBC 连接和读超时、连接回收及动态凭据。Runner 不关闭数据源。连接借出后设为 autoCommit=false、READ_COMMITTED，结束未完成事务后恢复原 autoCommit/隔离级别并归还。请提供干净的独立连接，不要包装正在使用的业务事务 Connection。
+The host manages pool acquisition timeouts, JDBC connect/read timeouts, connection recycling, and dynamic credentials. The Runner does not close DataSources. Borrowed connections use autoCommit=false and READ_COMMITTED; unfinished transactions are ended before restoring original autoCommit/isolation settings and returning the connection. Supply clean, independent connections, not wrappers around active business transaction Connections.
 
-## 策略默认值
+## Strategy defaults
 
-| 参数 | 默认 | 含义 |
+| Parameter | Default | Meaning |
 | --- | --- | --- |
-| strategy.max-concurrent-tables | 4 | 同时运行的表数，须满足连接预算 |
-| tables[].worker-count | 1 | 该表并发事务块数量 |
-| strategy.skip-limit | 0 | 每 job、每表累计允许的行级错误，续跑不清零 |
-| strategy.transient-retry-count | 3 | 初次尝试之外的有限瞬时重试 |
-| strategy.retry-initial-backoff / retry-max-backoff | 1s / 10s | 正数指数退避及上限 |
-| strategy.max-batch-bytes / max-lob-size | 16MB / 32MB | batch估算内存及单字段大小限制，不是 JVM 总内存限制 |
-| strategy.audit.table-name | migration_audit | 预建审计表，audit.enabled 必须 true |
-| tables[].mode | APPEND_RESUME | 默认追加恢复，不自动去重或更新冲突行 |
-| tables[].sequence.enabled | false | 开启时显式指定命名序列及目标列，数据完成后校准 |
+| strategy.max-concurrent-tables | 4 | Concurrent tables; connection budgets must be satisfied |
+| tables[].worker-count | 1 | Concurrent transaction blocks for this table |
+| strategy.skip-limit | 0 | Cumulative allowed row errors per job/table; recovery does not reset it |
+| strategy.transient-retry-count | 3 | Bounded transient retries after the initial attempt |
+| strategy.retry-initial-backoff / retry-max-backoff | 1s / 10s | Positive exponential backoff and its cap |
+| strategy.max-batch-bytes / max-lob-size | 16MB / 32MB | Estimated batch memory and single-field size limits, not a total JVM memory limit |
+| strategy.audit.table-name | migration_audit | Precreated audit table; audit.enabled must be true |
+| tables[].mode | APPEND_RESUME | Append and resume by default; no automatic deduplication or conflict updates |
+| tables[].sequence.enabled | false | Explicitly configure a named sequence and target column; calibrate after data completes |
 
-CLEAR_AND_REIMPORT 显式 DELETE 整张目标表，不只清源 SELECT 范围。修复后同 job 恢复不会再次执行已完成的准备清除。新一轮全量重做须新 job-id 并明确目标数据处置。
+CLEAR_AND_REIMPORT explicitly DELETEs the entire target table, not just the source SELECT range. Recovery of the same job does not repeat an already completed preparation DELETE. A fresh full reimport requires a new job-id and an explicit decision about existing target data.
 
-## 多文件覆盖与配置缓存
+## File overrides and configuration caching
 
-configLocations 后文件覆盖前文件，命令行优先，环境变量和 profile 按 Boot 配置规则处理。Spring 列表整体替换，tables/fields 不能按名称增量合并。首次绑定成功后配置缓存；修改文件不会让已有 Runner 热加载。
+Later configLocations files override earlier files; command-line arguments take precedence. Environment variables and profiles follow Boot configuration rules. Spring replaces lists as a whole: tables/fields are not merged by name. Configuration is cached after the first successful binding; editing files does not hot-reload an existing Runner.
 
-本版不接管旧版未完成检查点，旧 API 和配置不保留。审计表已删除 fingerprint 列和内部执行锁记录，详见 [审计设计](audit.md)。旧任务先用旧版本完成；使用者人工准备新版审计表，组件不自动转换或 ALTER。
+This version does not adopt unfinished checkpoints from earlier versions or preserve old APIs/configuration. The audit table no longer has fingerprint or internal execution-lock records; see [audit design](audit.md). Complete old jobs with the old version first. Users prepare the new audit table manually; the component performs no automatic conversion or ALTER.

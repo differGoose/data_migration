@@ -127,31 +127,31 @@ public final class ManualMigrationConsole implements AutoCloseable {
 
     private String page() {
         return """
-            <!doctype html><html lang="zh-CN"><meta charset="utf-8">
-            <title>迁移手动故障测试</title>
-            <body><h1>迁移手动故障测试</h1>
-            <p>点击执行后，可随时切断连接。等待本轮 FAILED，再恢复连接并点击续跑。</p>
-            <p>继续使用原 job-id、配置和源数据范围。恢复网络不会自动重新执行迁移。</p>
-            <button data-action="run">执行 / 续跑</button>
-            <button data-action="source/cut">断开 source</button>
-            <button data-action="source/restore">恢复 source</button>
-            <button data-action="target/cut">断开 target</button>
-            <button data-action="target/restore">恢复 target</button>
-            <button data-action="finish">成功后结束测试</button>
-            <button data-action="abort">终止测试（失败）</button>
+            <!doctype html><html lang="en"><meta charset="utf-8">
+            <title>Manual migration fault testing</title>
+            <body><h1>Manual migration fault testing</h1>
+            <p>After starting, cut either connection at any time. Wait for FAILED, restore connectivity, then resume.</p>
+            <p>Keep the original job-id, configuration, and source range. Restoring connectivity does not rerun migration automatically.</p>
+            <button data-action="run">Run / Resume</button>
+            <button data-action="source/cut">Cut source</button>
+            <button data-action="source/restore">Restore source</button>
+            <button data-action="target/cut">Cut target</button>
+            <button data-action="target/restore">Restore target</button>
+            <button data-action="finish">Finish test after success</button>
+            <button data-action="abort">Abort test (failure)</button>
             <pre id="status"></pre><pre id="message"></pre>
             <script>
             const base = location.pathname;
             async function refresh() {
               try { const r = await fetch(base + 'status'); document.getElementById('status').textContent = await r.text(); }
-              catch (e) { document.getElementById('status').textContent = '控制连接已关闭'; }
+              catch (e) { document.getElementById('status').textContent = 'Control connection closed'; }
             }
             document.querySelectorAll('button').forEach(button => button.onclick = async () => {
               try {
                 const r = await fetch(base + button.dataset.action, {method:'POST'});
                 document.getElementById('message').textContent = r.status + ' ' + await r.text();
                 await refresh();
-              } catch(e) { document.getElementById('message').textContent = '控制连接已关闭'; }
+              } catch(e) { document.getElementById('message').textContent = 'Control connection closed'; }
             });
             refresh(); setInterval(refresh, 1000);
             </script></body></html>

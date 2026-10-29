@@ -2,31 +2,31 @@
 
 ## Unreleased
 
-- 模拟宿主真实迁移测试增加可选手动代理模式，通过本机控制页分别切断/恢复源和目标，并用原配置、原job显式续跑；不要求e2e配置段。
+- Add an optional manual proxy mode to the real host migration test. A local control page independently cuts/restores source and target connections and explicitly resumes the original job with unchanged configuration; no e2e configuration section is required.
 
-- Oracle ojdbc11和PostgreSQL驱动改为默认runtime依赖，测试和宿主运行时均可直接使用，移除resilience-dev profile。
+- Make Oracle ojdbc11 and PostgreSQL drivers default runtime dependencies for tests and host applications; remove the resilience-dev profile.
 
-- 使用 JVM 共享单许可立即拒绝迁移重叠调用，清理完工作线程与事务后才释放；部署方保证不同进程不重叠。
-- 删除数据库执行锁、所有权令牌、配置 fingerprint 及端点身份摘要；保留事务行锁和数据/检查点原子提交。新版审计表由使用者手工准备，不转换旧任务。
-- 有键连接预算改为源/目标各 W+1，无键改为源1/目标2；仅支持与验证 JDK 17。
+- Immediately reject overlapping migrations with a JVM-wide single permit, released only after worker and transaction cleanup; deployment must prevent different processes from overlapping.
+- Remove database execution locks, ownership tokens, configuration fingerprints, and endpoint identity digests. Retain transactional row locks and atomic data/checkpoint commits. Users prepare the new audit schema manually; old jobs are not converted.
+- Change keyed-table connection budgets to W+1 on each side, and keyless budgets to source 1 / target 2. Support and verify JDK 17 only.
 
-- 增加直接接收外部DataSource的DatabaseE2E、main及显式配置IT入口；报告校验迁移、审计和重复执行。
-- 故障宿主改用正式Runner，移除测试强加的空目标、追加模式和零跳过限制。
+- Add DatabaseE2E accepting external DataSources, a main entry point, and an explicitly configured IT entry; reports validate migration, auditing, and repeated execution.
+- Use the production Runner in fault-test hosts; remove test-only requirements for empty targets, append mode, and zero skipped rows.
 
-- **破坏性改造**：宿主直接提供两个 DataSource，组件不再建池或获取凭据；删除旧连接配置和启动自动执行开关，不兼容旧版未完成任务。
-- 新增无 Spring 容器的 MigrationRunner，支持宿主 .run() 前同步迁移；Spring 包装通过源/目标注解选择 DataSource，容量由宿主声明。
-- 三项全局行数参数统一为每表 batch-size，默认1000，控制有键表事务块、JDBC batch和fetch提示；无键表保留整表事务。
-- 连接借用/归还时设置并恢复事务属性，归还前回滚未完成事务；借连接错误脱敏保留SQLState和厂商码以支持有限重试。
-- 改造 H2/DEV 恢复测试，保留精确提交边界、独立宿主JVM、TCP代理和脱敏执行清单；DEV由测试宿主提供DataSource。
-- 重写宿主接入、配置、解密/IAM、ECS及H2文档，提供可运行启动前示例。仅验证JDK17及行/分支各85%门槛。
+- **Breaking redesign**: the host supplies both DataSources. The component no longer creates pools or obtains credentials. Remove old connection configuration and the automatic startup switch; unfinished jobs from older versions are incompatible.
+- Add MigrationRunner without a Spring context for synchronous migration before the host calls .run(). The Spring adapter selects DataSources through source/target annotations; the host declares capacity.
+- Replace three global row-count settings with per-table batch-size, default 1000, controlling keyed transaction blocks, JDBC batches, and fetch hints. Keyless tables retain a single whole-table transaction.
+- Set and restore transaction properties when borrowing/returning connections; roll back unfinished transactions before return. Redact acquisition errors while preserving SQLState and vendor codes for bounded retries.
+- Adapt H2/DEV resilience tests, retaining precise commit boundaries, isolated host JVMs, TCP proxies, and redacted execution manifests. DEV DataSources come from the test host.
+- Rewrite host integration, configuration, decryption/IAM, ECS, and H2 documentation, and provide a runnable pre-startup example. Verify JDK 17 only and retain 85% line and branch coverage thresholds.
 
 ## 0.1.0-SNAPSHOT — 2026-10-28
 
-初始开发版本，尚未发布到 Maven Central。
+Initial development release; not published to Maven Central.
 
-- 提供可嵌入宿主的单模块 Spring Boot 4.1.1 / Java 21 JDBC 迁移组件和同步方法入口。
-- 支持 YAML 连接、连接池、映射、两级并发、跳过/重试及审计配置。
-- 有键表按范围保存事务检查点并支持恢复；无键表采用整表事务。
-- 提供显式清除重导、序列收尾、BLOB/CLOB 流式写入及目标表执行锁。
-- 提供双 H2 / 10,000 行 E2E、TLS 正反例、断连与进程重启恢复测试。
-- 提供 DBeaver 本地指南、Oracle/PostgreSQL TLS 与 ECS 接入说明；IAM 自动刷新及真实云端联调仍待完成。
+- Provide an embeddable, single-module Spring Boot 4.1.1 / Java 21 JDBC migration component with a synchronous method entry point.
+- Support YAML connections, pools, mappings, two-level concurrency, skipping/retries, and audit configuration.
+- Persist range-based transaction checkpoints for keyed tables and support recovery; use a whole-table transaction for keyless tables.
+- Provide explicit clear-and-reimport, sequence finalization, BLOB/CLOB streaming writes, and target-table execution locks.
+- Provide two-H2 / 10,000-row E2E tests, positive and negative TLS tests, disconnection recovery, and process restart tests.
+- Provide local DBeaver instructions, Oracle/PostgreSQL TLS guidance, and ECS integration notes. Automatic IAM refresh and real cloud validation remain pending.

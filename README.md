@@ -1,29 +1,29 @@
 # data_migration
 
-可嵌入宿主的 Java 17 / Spring Boot 4.1.1 JDBC 迁移组件。宿主提供源、目标 `DataSource`，组件负责表映射、事务、审计及断点恢复。当前为 `0.1.0-SNAPSHOT` 开发版本。
+An embeddable JDBC migration component for Java 17 / Spring Boot 4.1.1. The host supplies source and target `DataSource` objects; the component handles table mappings, transactions, auditing, and checkpoint recovery. The current development version is `0.1.0-SNAPSHOT`.
 
-## 从哪里开始
+## Where to start
 
-| 需要做什么 | 文档 |
+| What you need | Documentation |
 | --- | --- |
-| 在宿主 `.run()` 前迁移，或通过注解接入 Spring | [完整接入步骤](docs/getting-started.md) |
-| 理解每表 batch-size、job-id 和字段映射 | [配置说明](docs/configuration.md) |
-| 运行合成数据示例 | [H2 本地指南](docs/h2-local.md) |
-| 自定义解密和 IAM 数据源 | [宿主凭据与数据源](docs/database-credentials.md) |
-| 查询进度、失败续跑、重新全量迁移 | [运维指南](docs/operations.md) |
-| TLS 和 ECS 接入 | [云端指南](docs/cloud-deployment.md) |
-| 把真实DataSource直接交给E2E，或通过配置main/Maven执行 | [真实数据库E2E](docs/real-database-e2e.md) |
-| 模拟断网和宿主崩溃 | [恢复测试](docs/resilience-testing.md) |
-| 手动断开/恢复source或target，再调用原job续跑 | [模拟宿主手动代理测试](docs/manual-host-migration.md) |
-| 实现原理与测试位置 | [架构](docs/architecture.md)、[测试索引](docs/test-index.md) |
+| Migrate before the host calls `.run()`, or integrate through Spring annotations | [Host integration](docs/getting-started.md) |
+| Understand per-table batch-size, job-id, and field mappings | [Configuration](docs/configuration.md) |
+| Run examples with synthetic data | [Local H2 guide](docs/h2-local.md) |
+| Supply custom decryption and IAM DataSources | [Host credentials and DataSources](docs/database-credentials.md) |
+| Inspect progress, resume failures, or reimport all data | [Operations](docs/operations.md) |
+| Configure TLS and ECS integration | [Cloud deployment](docs/cloud-deployment.md) |
+| Pass real DataSources directly to E2E, or run through main/Maven configuration | [Real database E2E](docs/real-database-e2e.md) |
+| Simulate network outages and host crashes | [Resilience testing](docs/resilience-testing.md) |
+| Manually cut/restore source or target connections and resume the original job | [Manual host proxy testing](docs/manual-host-migration.md) |
+| Find implementation details and tests | [Architecture](docs/architecture.md), [test index](docs/test-index.md) |
 
-## 启动前执行
+## Run before host startup
 
-先在本仓库 `mvn clean install`，宿主引入 `com.datamigration:data_migration:0.1.0-SNAPSHOT`，自行添加连接池；Oracle和PostgreSQL JDBC驱动已作为运行时依赖提供。组件没有内置数据库连接配置或连接池，不创建 Spring 容器。
+Run `mvn clean install` in this repository, then add `com.datamigration:data_migration:0.1.0-SNAPSHOT` to the host. Add a connection pool of your choice; Oracle and PostgreSQL JDBC drivers are already runtime dependencies. The component has no built-in connection configuration or pool and creates no Spring context.
 
 ```java
 public static void main(String[] args) {
-    // HostDataSources 是宿主自己的工厂，返回可关闭的连接池。
+    // HostDataSources is the host's own factory, returning closeable connection pools.
     try (var source = HostDataSources.createSource();
          var target = HostDataSources.createTarget();
          var migration = MigrationRunner.builder()
@@ -36,30 +36,30 @@ public static void main(String[] args) {
 }
 ```
 
-迁移异常向外传播，正式宿主不会启动。`4` 表示宿主为迁移预留的连接数，不会修改连接池容量；源、目标分别声明。Runner 关闭只释放自己的执行资源，不关闭宿主数据源。
+Migration exceptions propagate and prevent the real host from starting. `4` declares the connections reserved for migration; it does not resize the pool. Source and target capacities are declared separately. Closing the Runner releases its execution resources without closing host DataSources.
 
-YAML 只描述迁移工作，完整例子见 [migration.yml](examples/migration.yml)。每张表使用独立 `tables[].batch-size`，默认 1000：有键表按该数量划分事务块、设置 fetch 提示及 JDBC batch 上限，单次调用持续迁移至完成。无键表仍为整表事务。
+YAML describes migration rules only; see [migration.yml](examples/migration.yml). Each table has its own `tables[].batch-size`, defaulting to 1000. For keyed tables it defines transaction blocks, the fetch hint, and the JDBC batch row limit. One call continues until migration completes. Keyless tables retain a single transaction for the entire table.
 
-同一 JVM 的默认引擎共享一个内存许可，任何 Runner / Spring Context 的迁移重叠调用都会立即抛出 IllegalStateException。迁移内部仍支持多表和批次并发。许可在事务和工作线程清理完毕后释放；部署方必须保证不同进程不会同时迁移。
+Default engines in the same JVM share one in-memory permit. Overlapping migration calls from any Runner or Spring context immediately throw IllegalStateException. Table and batch concurrency within one migration remains available. The permit is released after transaction and worker cleanup; deployment must prevent migrations in different processes from overlapping.
 
-## 重复调用与恢复
+## Repeated calls and recovery
 
-同一 job-id 表示同一轮工作，其中各表以 name 区分。重复调用会跳过成功任务，继续未完成批次，或重试未完成收尾；不是定时增量同步。源数据在迁移及恢复期间保持不变。恢复必须保持配置、数据源和源数据范围不变；组件不计算配置摘要，不检测配置漂移。
+The same job-id identifies one migration job; name distinguishes its table tasks. Repeated calls skip successful tasks, resume unfinished batches, or retry unfinished finalization. This is not scheduled incremental synchronization. Source data must remain unchanged throughout migration and recovery. Configuration, DataSources, and source ranges must remain unchanged when resuming; the component neither computes configuration digests nor detects configuration drift.
 
-目标业务表、审计表及所需序列必须人工创建。默认 APPEND_RESUME 不清理目标、不自动 upsert；CLEAR_AND_REIMPORT 显式允许删除整张目标表。审计字段和范围恢复示例见 [审计设计](docs/audit.md)。审计 SQL：[PostgreSQL](src/main/resources/db/postgresql/migration-audit.sql)、[H2](src/main/resources/db/h2/migration-audit.sql)。
+Create target business tables, the audit table, and required sequences manually. Default APPEND_RESUME does not clean targets or perform automatic upserts; CLEAR_AND_REIMPORT explicitly permits deleting the entire target table. See [audit design](docs/audit.md) for fields and range recovery examples. Audit SQL: [PostgreSQL](src/main/resources/db/postgresql/migration-audit.sql), [H2](src/main/resources/db/h2/migration-audit.sql).
 
-## Spring 容器内调用
+## Call from a Spring context
 
-宿主用 `@MigrationSource(capacity=4)`、`@MigrationTarget(capacity=4)` 标记两个 DataSource 的 @Bean 方法或实现类型，再注入 `MigrationService` 手动调用。每端必须唯一，不会因为启动容器就自动迁移。`.run()` 之前 Bean 尚不存在，请用上面的直接传对象入口。
+The host marks two DataSource @Bean methods or implementation types with `@MigrationSource(capacity=4)` and `@MigrationTarget(capacity=4)`, then injects `MigrationService` and calls it explicitly. Each role must be unique. Starting a context does not automatically run migration. Beans do not yet exist before `.run()`; use the direct-object entry above for that case.
 
-## 构建与边界
+## Build and boundaries
 
 ```sh
 mvn -B -ntp clean verify
 ```
 
-Surefire 运行 `*Test`，Failsafe 运行本地 `*IT`；真实 DEV 需显式启用。JaCoCo 单独统计 Surefire，行/分支均至少 85%。本地和 CI 仅支持、验证 JDK 17。组件为普通依赖 JAR，不是独立可执行服务；当前不承诺 Boot 2/3 兼容。
+Surefire runs `*Test`; Failsafe runs local `*IT` tests. Real DEV execution requires explicit opt-in. JaCoCo measures Surefire separately, with at least 85% line and branch coverage. Local development and CI support and verify JDK 17 only. The component is a regular dependency JAR, not a standalone executable service; Boot 2/3 compatibility is not currently promised.
 
-本次为破坏性改造，不兼容旧连接配置、旧批次参数和旧版本未完成检查点。Hikari 和 H2 仅用于测试/演示，不作为组件的宿主运行依赖。真实 Oracle/PostgreSQL、IAM 与云端部署仍需实际环境验收。
+This is a breaking redesign: old connection configuration, old batching parameters, and unfinished checkpoints from earlier versions are incompatible. Hikari and H2 are test/demo dependencies only, not host runtime dependencies supplied by the component. Real Oracle/PostgreSQL, IAM, and cloud deployment still require validation in the actual environment.
 
-贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，变化见 [CHANGELOG.md](CHANGELOG.md)。
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution rules and [CHANGELOG.md](CHANGELOG.md) for changes.

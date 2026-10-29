@@ -1,96 +1,96 @@
-# JDBC 迁移引擎设计
+# JDBC migration engine design
 
-本文件描述当前实现。验证证据与剩余验收工作见 acceptance-progress.md；H2 测试不能证明 Oracle/PostgreSQL 驱动的全部行为。
+This document describes the current implementation. See acceptance-progress.md for validation evidence and remaining work. H2 tests cannot establish all Oracle/PostgreSQL driver behavior.
 
-## 阅读前先统一术语
+## Terminology
 
-| 术语 | 本项目里的意思 |
+| Term | Meaning in this project |
 | --- | --- |
-| 宿主 | 引入组件并调用 migrate() 的 Spring Boot 应用 |
-| 表任务 | tables 列表中一个启用的配置项 |
-| 事务块 | 有键表中最多 tables[].batch-size 条源记录的范围，成功时数据和检查点一起提交 |
-| 检查点 | 目标审计库中持久化的边界与状态，进程退出后仍能读取 |
-| 协调连接 | 负责规划范围、汇总和收尾的连接，与 worker 连接分开 |
+| Host | The Spring Boot application that depends on the component and calls migrate() |
+| Table task | One enabled entry in the tables list |
+| Transaction block | A keyed range of at most tables[].batch-size source rows; data and checkpoint commit together on success |
+| Checkpoint | Boundaries and state persisted in the target audit database, readable after process exit |
+| Coordinator connection | A connection for range planning, summaries, and finalization, separate from worker connections |
 
-例如 2500 行、tables[].batch-size=1000 的单 worker 有键任务，通常规划三个事务块，分别处理 1000、1000、500 行。如果前两块成功、第三块失败，新宿主从第三块继续，而不是从最大已见 ID 猜测是否完成。实际实现采用有界窗口，避免先把全表键装进内存。
+For example, a single-worker keyed task with 2500 rows and tables[].batch-size=1000 normally plans blocks of 1000, 1000, and 500 rows. If the first two succeed and the third fails, a new host resumes the third block rather than guessing completion from the largest observed ID. Bounded planning windows avoid loading all table keys into memory first.
 
-本篇解释实现原因。如何接入和处理失败请分别看 [接入步骤](getting-started.md)及 [运维指南](operations.md)。
+This document explains implementation decisions. See [host integration](getting-started.md) for setup and [operations](operations.md) for handling failures.
 
-## 调用与资源
+## Invocation and resources
 
-MigrationRunner 接收宿主提供的两个 DataSource，使用 ConfigData 加载配置但不创建 Spring 容器。Spring 包装通过 AutoConfiguration.imports 自动发现，按源/目标标记选择宿主 DataSource，第一次调用绑定并缓存规则，不注册 ApplicationRunner。没有 REST 接口，不参与宿主业务事务。
+MigrationRunner accepts two host-supplied DataSources and loads configuration through ConfigData without creating a Spring context. The Spring adapter is discovered through AutoConfiguration.imports, selects host DataSources using source/target annotations, and binds/caches rules on the first call. It registers no ApplicationRunner. There is no REST interface and no participation in host business transactions.
 
-DataSourceConnections 只借用连接，设置 READ_COMMITTED、autoCommit=false，结束未完成事务后恢复宿主事务属性并归还；回滚失败时不会启用 autoCommit 以免意外提交。Runner/Spring 关闭只关闭引擎，数据源始终由宿主管理。不再读取端点元数据计算身份；恢复时实际端点与配置不变由调用方保证。
+DataSourceConnections only borrows connections, setting READ_COMMITTED and autoCommit=false. It ends unfinished transactions, restores host transaction properties, and returns connections. If rollback fails, it does not enable autoCommit, avoiding an accidental commit. Runner/Spring shutdown closes only the engine; the host always owns DataSources. Endpoint metadata is no longer read to compute identities; the caller must preserve actual endpoints and configuration during recovery.
 
-仅支持和验证 JDK 17。ExecutorScope 在离开作用域时 shutdown 并等待所有任务结束；等待被中断时 shutdownNow，继续等待资源清理完成，最后恢复调用线程的中断标志。该实现替代新版 JDK 的 ExecutorService.close，保持事务回滚和 Spring 关闭顺序。
+Only JDK 17 is supported and verified. ExecutorScope calls shutdown on scope exit and waits for all tasks. If interrupted while waiting, it calls shutdownNow, continues waiting for cleanup, then restores the caller's interrupted flag. This replaces newer JDK ExecutorService.close behavior while preserving rollback and Spring shutdown ordering.
 
 ```mermaid
 flowchart TD
-    A[MigrationService.migrate] --> B[绑定校验与连接预算]
-    B --> C[tryAcquire JVM共享许可]
-    C --> D[有界表调度]
-    D --> E[SQL及映射预检]
-    E --> F{有唯一键?}
-    F -->|是| G[分页规划固定键范围]
-    G --> H[有界批次并发]
-    H --> I[业务 INSERT 与成功检查点同事务]
-    F -->|否| J[整表单事务和单个检查点]
-    I --> K[核对总数及完成标志]
+    A[MigrationService.migrate] --> B[Bind validation and connection budget]
+    B --> C[tryAcquire JVM-wide permit]
+    C --> D[Bounded table scheduling]
+    D --> E[SQL and mapping preflight]
+    E --> F{Unique key?}
+    F -->|Yes| G[Page and plan fixed key ranges]
+    G --> H[Bounded batch concurrency]
+    H --> I[Business INSERT and successful checkpoint in one transaction]
+    F -->|No| J[Whole-table transaction and one checkpoint]
+    I --> K[Verify totals and completion flags]
     J --> K
-    K --> L[序列收尾]
-    L --> M[汇总独立表结果]
+    K --> L[Sequence finalization]
+    L --> M[Collect independent table results]
 ```
 
-## SQL 与源数据条件
+## SQL and source-data requirements
 
-YAML 是受信任管理员配置。JSqlParser 验证单个 SELECT 和目标 INSERT 结构，词法检查忽略字符串中的问号；INSERT 必须是单行 VALUES 模板，参数数与 fields 相同。源查询不接受 CTE、参数、FOR UPDATE 和显式序列推进等已知副作用语法。解析器不是权限沙箱，源账号仍应只有所需表的 SELECT 权限，管理员不能配置有副作用的函数。
+YAML is trusted administrator configuration. JSqlParser validates a single SELECT and target INSERT structure; lexical checks ignore question marks inside strings. INSERT must be a single-row VALUES template with the same parameter count as fields. Source queries reject CTEs, parameters, FOR UPDATE, explicit sequence advancement, and other known side-effect syntax. The parser is not a permission sandbox. The source account still needs SELECT-only permissions on required tables, and administrators must not configure functions with side effects.
 
-通过空结果查询校验列标签、通过目标 ParameterMetaData 校验参数数量，再检查配置键是否唯一、非空。简单标识符仅允许字母/下划线开头及后续字母数字下划线；表名可带一个 schema。源结果标签可以带引用，范围 SQL 按实际元数据引用。
+An empty-result query validates column labels; target ParameterMetaData validates parameter counts; configured keys are then checked for uniqueness and non-nullness. Simple identifiers must begin with a letter/underscore and contain only letters, digits, and underscores; table names may include one schema. Source result labels may be quoted; range SQL uses their actual metadata quoting.
 
-源数据在迁移和重试期间必须保持静态。行数及各批次预期数量会检查，但不能证明内容未被更新。目标也应停止业务写入。没有跨库一致快照、CDC、任意时点源恢复或外部写入协调。
+Source data must remain static during migration and retries. Row counts and expected batch counts are checked, but these cannot prove that contents have not changed. Stop business writes to targets as well. There is no cross-database consistent snapshot, CDC, point-in-time source recovery, or external-write coordination.
 
-## 有键表的检查点
+## Checkpoints for keyed tables
 
-协调线程按键的字典序规划 `(lower, upper]` 范围，联合键生成逐项比较谓词并使用 PreparedStatement 绑定。规划窗口最多 worker-count × 2 个事务块，每块最多 tables[].batch-size 条源记录；规划持久化后才能执行。不会把全表键或数据加载到内存。
+The coordinator plans `(lower, upper]` ranges in lexicographic key order. Composite keys generate component-wise comparison predicates bound through PreparedStatement. A planning window contains at most worker-count x 2 transaction blocks, each with at most tables[].batch-size source rows. Plans must be persisted before execution. Entire-table keys or data are never loaded into memory.
 
-每个 worker 独立使用源、目标连接，在目标事务中先锁定自己的批次记录，流式读取并写入该范围，再锁定表汇总行累计计数、检查 skip-limit，最终将成功检查点和数据一起提交。不同批次即使乱序完成也不会丢失缺口。
+Each worker uses independent source and target connections. In the target transaction it first locks its batch record, streams and writes the range, then locks the table summary to accumulate counts and check skip-limit, finally committing data and the successful checkpoint together. Out-of-order batch completion does not lose gaps.
 
-重启保持同一 job-id 和任务名，读取未成功的已规划批次，之后继续规划。配置、实际数据源和源数据范围必须保持不变，不计算或比较配置摘要。成功任务返回已有结果。runId 是本次 API 调用标识，持久化恢复身份使用 job-id。
+Restart with the same job-id and task name, read unsuccessful planned batches, then continue planning. Configuration, actual DataSources, and source ranges must remain unchanged; no configuration digest is computed or compared. Successful tasks return existing results. runId identifies this API invocation, while job-id is the durable recovery identity.
 
-## 无键表与重导
+## Keyless tables and reimports
 
-无键表 worker-count 必须为 1，全部读取和写入属于一个目标事务，坏数据不跳过。batch-size 只控制 executeBatch，不能触发 commit。处理进度可以由协调连接单独记录，但它不代表已提交数据。进程中断后的目标事务回滚；下次从整表开始。
+Keyless tables require worker-count=1. All reads and writes belong to one target transaction, and bad data is not skipped. batch-size controls executeBatch only, not commit. A coordinator connection may record processing progress separately, but it does not represent committed data. After process interruption, the target transaction rolls back and the next attempt restarts the whole table.
 
-默认 APPEND_RESUME 不清除目标。显式 CLEAR_AND_REIMPORT 使用 DELETE，避免不同数据库 TRUNCATE 的隐式提交差异。有键表先清除并提交 prepared 标记，再导入；同一 job-id 恢复不再清除。无键表将 DELETE、所有 INSERT 和成功检查点置于同一事务。新一轮全量重导需要新的 job-id，不覆盖旧审计历史。
+Default APPEND_RESUME does not clear targets. Explicit CLEAR_AND_REIMPORT uses DELETE to avoid database-specific TRUNCATE implicit-commit differences. Keyed tables clear and commit the prepared flag before importing; recovery with the same job-id does not clear again. Keyless tables place DELETE, all INSERTs, and the successful checkpoint in one transaction. A new full reimport needs a new job-id and does not overwrite old audit history.
 
-目标触发器、外键及权限由部署方负责；不自动级联、不临时禁用约束、不自动 upsert。独立表并行，一表失败不阻止其他表完成；最终 MigrationException.result() 保留逐表状态。表内批次失败后停止启动排队批次，已经运行的批次完成自身事务处理，未执行范围保留为待恢复检查点。
+Deployment owns target triggers, foreign keys, and permissions. There is no automatic cascade, temporary constraint disabling, or automatic upsert. Independent tables run in parallel; one failure does not prevent others from completing. MigrationException.result() retains per-table status. A batch failure stops queued batches of that table from starting. Already running batches finish their transaction handling, and unexecuted ranges remain recoverable checkpoints.
 
-## 故障处理
+## Failure handling
 
-批量数据错误先回滚整个事务块，再使用逐行保存点定位可跳过行；跳过额度按 job-id/表跨批次累计，由汇总行锁串行检查，不能由多个 worker 分别消费完整额度。SQLState 22 和明确的约束错误可归类为数据错误；结构、权限、网络故障不能跳过。
+Batch data errors first roll back the entire transaction block, then use per-row savepoints to identify skippable rows. Skip budgets accumulate across batches per job-id/table and are serialized through the summary row lock; workers cannot each consume the full budget. SQLState 22 and explicit constraint errors may be classified as data errors; schema, permission, and network errors cannot be skipped.
 
-瞬时错误仅在确认回滚后按上限指数退避重试。重试计数不包含初次执行，持久化累计次数供审计。COMMIT 调用异常后，新连接使用 FOR UPDATE 读取检查点，等待原事务完成；确认成功即返回，确认未成功才按错误分类决定重试。无法核实则 COMMIT_UNKNOWN，调用方必须恢复连接后使用同一 job-id 核实，不能直接换新任务盲目追加。
+Transient errors are retried with capped exponential backoff only after rollback is confirmed. Retry counts exclude the initial attempt and are persisted cumulatively for audit. After a COMMIT exception, a new connection reads the checkpoint FOR UPDATE and waits for the original transaction. Confirmed success returns; confirmed failure permits retry only according to classification. If verification fails, the result is COMMIT_UNKNOWN. The caller must restore connectivity and verify with the same job-id, not blindly append under a new job.
 
-序列只在数据提交完成之后校准，目标 ID 最大值必须可精确表示为 BIGINT；仅支持步长 1、非循环命名序列，已有水位更高时保持不变。H2 ALTER SEQUENCE 和 PostgreSQL setval 的非事务性效果独立处理，失败标记 FINALIZATION_FAILED；相同任务重试跳过数据阶段，再执行幂等收尾。空表无需推进。此机制不复制源数据库序列缓存状态。
+Sequences are calibrated only after data commits. The maximum target ID must be exactly representable as BIGINT. Only non-cycling named sequences with increment 1 are supported; an already higher position is preserved. Nontransactional H2 ALTER SEQUENCE and PostgreSQL setval effects are handled separately. Failure is FINALIZATION_FAILED; retries of the same task skip the data phase and repeat idempotent finalization. Empty tables need no advancement. Source sequence cache state is not copied.
 
-## JVM 执行协调与事务行锁
+## JVM execution coordination and transactional row locks
 
-默认 JdbcMigrationEngine 公共 execute 入口使用 static、单许可 Semaphore.tryAcquire。已有迁移执行时，不论 Runner、Spring Context 或目标表是否不同，重叠调用都立即失败，且拒绝前不借连接。单个 Runner / 引擎也禁止自身重入。自定义 MigrationEngine 由宿主负责自己的执行协调。
+The default JdbcMigrationEngine public execute entry uses a static, single-permit Semaphore.tryAcquire. Any overlapping call fails immediately, regardless of Runner, Spring context, or target table, before borrowing connections. Individual Runners/engines also reject reentry. Hosts supplying a custom MigrationEngine own its execution coordination.
 
-许可属于实际执行调用；close 只请求取消并等待清理，不释放许可。成功、异常、中断及取消均经 ExecutorScope 等待所有表和 worker 退出、连接事务结束后，最后在 execute 的 finally 归还许可。关闭未执行的 Runner 不影响正在运行的迁移。
+The executing call owns the permit. close only requests cancellation and waits for cleanup; it does not release the permit. Success, exceptions, interruption, and cancellation all wait through ExecutorScope for tables/workers and connection transactions to finish before execute's finally releases it. Closing an unused Runner does not affect an active migration.
 
-该内存机制不协调不同进程。部署和运维必须确保旧迁移进程已结束再启动恢复进程，也应避免在同一进程用隔离的组件类加载器重复加载迁移引擎。不提供跨进程接管、租约或 fencing。测试不再模拟并行旧执行者接管。
+This memory mechanism does not coordinate different processes. Deployment and operations must ensure the old migration process exits before recovery starts, and should avoid loading separate copies of the engine in isolated classloaders in one process. Cross-process takeover, leases, and fencing are not provided. Tests no longer simulate parallel stale-owner takeover.
 
-执行协调不占数据库连接；有键表 W 个 worker 需要源 W+1、目标 W+1，无键表需要源1、目标2。批次行锁与汇总行锁仍保留，防止表内并发计数、跳过额度及提交结果核实出现竞态；这些锁随事务释放，不生成单独锁记录。
+Execution coordination consumes no database connection. A keyed table with W workers needs source W+1 and target W+1; a keyless table needs source 1 and target 2. Batch and summary row locks remain to prevent races in counts, skip budgets, and commit verification. They release with transactions and create no separate lock records.
 
-## 审计与内存边界
+## Auditing and memory boundaries
 
-审计只使用一个预建表，batch_no=0 保存表汇总，正数记录批次。不生成内部锁记录。字段包含边界、预期行数、已提交/跳过/处理行数、重试次数、准备/规划/数据完成标志、状态、开始与更新时间、脱敏错误类别。DDL 位于 src/main/resources/db，运行引擎不自动建表。完整字段与边界示例见 [审计设计](audit.md)。
+Auditing uses one precreated table: batch_no=0 stores summaries and positive numbers store batches. There are no internal lock records. Fields include boundaries, expected/committed/skipped/processed counts, retries, preparation/planning/data-complete flags, status, timestamps, and redacted error categories. DDL is in src/main/resources/db; the running engine never creates tables. See [audit design](audit.md) for the field reference and boundary examples.
 
-错误结果只暴露分类、SQLState 和厂商错误码，不打印密码、完整 SQL、绑定值或行内容。审计错误不能伪装为业务成功。审计历史和检查点可能包含键值，仍需数据库权限与保留策略保护。
+Error results expose only categories, SQLState, and vendor codes, not passwords, full SQL, bound values, or row contents. Audit failures must not be reported as business success. Audit history/checkpoints may contain key values and still require database permissions and retention controls.
 
-JdbcRows 按行读取，普通 JDBC batch 同时受 batch-size 与 max-batch-bytes 约束；转换值大小是估算值，驱动内部缓冲另计。BLOB/CLOB 在当前行立即消费流，不累积多条 LOB；释放顺序为流、LOB 对象。单字段超过 max-lob-size 失败，CLOB 按 UTF-16 单元折算。并发线程越多，驱动缓冲与网络资源占用也越多；不能将字节配置等同于 JVM RSS 上限。
+JdbcRows reads row by row. Ordinary JDBC batches are constrained by both batch-size and max-batch-bytes; converted sizes are estimates, excluding driver-internal buffering. BLOB/CLOB streams are consumed immediately for the current row without accumulating multiple LOBs; streams are released before LOB objects. A field exceeding max-lob-size fails; CLOB sizes use UTF-16 units. More concurrent workers increase driver buffering and network usage; byte settings are not a JVM RSS limit.
 
-## 验证层次
+## Validation layers
 
-单元/组件测试验证事务、边界、配置、SQL、JDBC 契约及故障注入；JaCoCo 只统计 Surefire，不包含 Failsafe E2E。E2E 使用两个真实 H2 TCP 服务、独立文件数据库、Spring YAML 与方法入口，覆盖 10,000 行、TLS 信任验证、断连与新 JVM 恢复。PostgreSQL 方言的 mock JDBC 测试不替代真实 PostgreSQL；真实 Oracle TCPS、PostgreSQL 驱动、IAM/ECS 需在相应环境另行验收。
+Unit/component tests cover transactions, boundaries, configuration, SQL, JDBC contracts, and fault injection. JaCoCo measures Surefire only, excluding Failsafe E2E. E2E uses two actual H2 TCP servers, independent file databases, Spring YAML, and method entry points, covering 10,000 rows, TLS trust, disconnects, and recovery in a new JVM. Mock PostgreSQL dialect JDBC tests do not replace a real PostgreSQL run. Real Oracle TCPS, PostgreSQL drivers, and IAM/ECS require separate validation in those environments.

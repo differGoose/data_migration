@@ -1,21 +1,21 @@
-# 故障恢复测试
+# Resilience testing
 
-推荐新入口见 [真实DataSource E2E](real-database-e2e.md)：普通迁移与四类故障共用e2e配置，数据源由调用方提供。以下是原resilience入口的本地用法。
+The recommended new entry is [real DataSource E2E](real-database-e2e.md): ordinary migration and four fault types share e2e configuration, with caller-supplied DataSources. The following describes local use of the original resilience entry.
 
-默认mvn clean verify只运行本地H2设施；真实数据库显式启用，数据库对象由使用者提前准备。源数据必须稳定。测试不额外建表、清表或造真实业务数据，正式迁移模式自身的行为不受修改。
+Default mvn clean verify runs local H2 fixtures only. Real databases require explicit opt-in and user-prepared objects. Source data must remain stable. Tests add no schema creation, target clearing, or real business-data seeding; production migration modes keep their normal behavior.
 
 ```powershell
 mvn -B -ntp verify "-Dit.test=ConfiguredResilienceIT" "-Dresilience.config=file:examples/resilience/scenarios.yml,file:examples/resilience/h2.yml" "-Dresilience.scenario=SOURCE_OUTAGE"
 ```
 
-本地H2 fixture自己准备独立数据库；真实环境可使用配置的外部源/目标标记Bean，按[旧DEV模板](../examples/resilience/oracle-postgresql.yml)显式配置。更推荐e2e新模板，不需要把连接配置交给组件。
+The local H2 fixture prepares isolated databases. Real environments can register external source/target annotated beans through the [legacy DEV template](../examples/resilience/oracle-postgresql.yml). Prefer the new e2e template, which does not pass connection configuration to the component.
 
-父进程持有源、目标TCP代理，关闭已有转发连接并拒绝新连接；宿主在子JVM执行。业务SQL精确匹配并在提交边界与父进程握手。网络恢复后以同job/config重启Runner，最后再次执行核对数据和审计未累计。
+The parent process owns source/target TCP proxies, closes existing relays, and rejects new connections. The host runs in a child JVM. Exact business-SQL matching synchronizes with the parent at commit boundaries. After network restoration, restart the Runner with the same job/configuration, then execute again to verify data and audit counts do not accumulate.
 
-不要求新job空目标，不强制APPEND_RESUME、有键或零跳过额度。触发任务单worker用于确定故障顺序。无键表提交前崩溃也可恢复整表事务。新job冲突、同job完成、显式重导均由正式引擎处理；测试失败保留现场。
+A new job need not have empty targets. APPEND_RESUME, keyed tables, and zero skips are not forced. The trigger task uses one worker for deterministic fault ordering. Keyless pre-commit crashes can also recover a whole-table transaction. New-job conflicts, completed jobs, and explicit reimports follow production logic. Failed tests preserve the current state.
 
-源验证SQL表达预期最终子集，跳过额度>0时可排除预期坏数据；完整迁移源数量另外用于核对committed+skipped。汇总与批次审计合计一致，重复执行前后的目标摘要及批次/计数一致。崩溃前后对比触发任务已经提交的目标快照，不依赖“目标最初为空”的假设。
+Source validation SQL describes the expected final subset and may exclude expected bad rows when skips are allowed. The complete migration source count separately verifies committed+skipped. Summary and batch totals must agree, and target digests/batch counts must remain unchanged on repetition. Compare committed target snapshots around host crashes without assuming an initially empty target.
 
-每轮保存脱敏manifest/result；控制文件和子进程日志仅供本地诊断。已有完成任务不会为了制造故障换新job或清目标，报告会如实标记faultTriggered=false。详细字段、超时和路由方式见新版指南。
+Each run stores a redacted manifest/result. Control files and child logs are local diagnostic material. Completed jobs do not get new IDs or cleared targets just to force faults; reports honestly record faultTriggered=false. See the new guide for fields, timeouts, and routing.
 
-仅支持 JDK 17。父进程先确认故障宿主 JVM 结束，再启动恢复宿主；任意时刻只运行一个迁移进程。新版不包含数据库执行锁、所有权令牌或跨进程接管测试。恢复保持原配置、实际数据源和源范围不变；事务检查点和数据原子提交保证仍保留。
+Only JDK 17 is supported. The parent confirms the faulted host JVM has exited before starting recovery; only one migration process runs at a time. The new version has no database execution locks, ownership tokens, or cross-process takeover tests. Recovery keeps original configuration, actual DataSources, and source ranges unchanged; transactional checkpoints and atomic data commits remain guaranteed.

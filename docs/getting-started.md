@@ -1,10 +1,10 @@
-# 宿主接入：在应用启动前完成迁移
+# Host integration: complete migration before application startup
 
-本模块只执行迁移。数据库地址、账号、解密、IAM与连接池由宿主负责；组件提供Oracle/PostgreSQL运行时驱动依赖。先调用迁移，再执行正式宿主的 `SpringApplication.run`。
+This module performs migration only. The host owns database addresses, accounts, decryption, IAM, and connection pools; the component supplies Oracle/PostgreSQL runtime driver dependencies. Invoke migration before the real host's `SpringApplication.run`.
 
-## 1. 引入依赖并准备对象
+## 1. Add the dependency and prepare database objects
 
-在组件仓库执行 `mvn clean install`，宿主 pom.xml 添加：
+Run `mvn clean install` in the component repository, then add this to the host pom.xml:
 
 ```xml
 <dependency>
@@ -14,9 +14,9 @@
 </dependency>
 ```
 
-宿主使用 Boot 4.1.1 依赖管理、JDK 17，Oracle/PostgreSQL JDBC驱动已由组件运行时依赖提供；其他数据库需自行添加驱动。若用 Hikari，宿主另行添加 `com.zaxxer:HikariCP`；组件不会传递这个生产依赖。源账号只读业务数据，目标账号具备业务 INSERT、审计读写和锁权限。需要重导或序列校准时再授予对应权限。
+Use Boot 4.1.1 dependency management and JDK 17. Oracle/PostgreSQL JDBC drivers are already runtime dependencies; add drivers yourself for other databases. For Hikari, separately add `com.zaxxer:HikariCP`; the component does not supply it as a production dependency. Grant source business-table read access only. The target account needs business INSERT, audit read/write, and row-lock permissions. Add permissions for reimport or sequence calibration only when required.
 
-目标表与审计表人工创建。[PostgreSQL 审计 SQL](../src/main/resources/db/postgresql/migration-audit.sql) 在目标库执行。字段类型和长度按源数据设计，例如：
+Create target and audit tables manually. Apply the [PostgreSQL audit SQL](../src/main/resources/db/postgresql/migration-audit.sql) to the target database. Choose field types and lengths based on source data, for example:
 
 ```sql
 CREATE TABLE customer_copy (
@@ -26,11 +26,11 @@ CREATE TABLE customer_copy (
 );
 ```
 
-源数据在迁移和恢复期间不变；目标暂停业务写入。迁移不创建一致快照，不提供 CDC。
+Keep source data unchanged throughout migration and recovery, and pause target business writes. Migration creates no consistent snapshot and provides no CDC.
 
-## 2. 填迁移规则
+## 2. Define migration rules
 
-将 [完整模板](../examples/migration.yml) 复制为宿主 classpath 中的 migration.yml，替换表名与 SQL。连接信息不放在 data-migration 下。
+Copy the [complete template](../examples/migration.yml) to migration.yml on the host classpath and replace table names and SQL. Connection settings do not belong under data-migration.
 
 ```yaml
 data-migration:
@@ -53,11 +53,11 @@ data-migration:
         - {source-column: AMOUNT, target-jdbc-type: DECIMAL}
 ```
 
-fields 顺序对应 INSERT 的问号；source-column 对应 SELECT 列标签。batch-size 是每个事务块的源记录数量上限，不是每次 API 调用只处理 1000 行。
+fields order matches INSERT question marks; source-column matches SELECT result labels. batch-size is the source-row limit for each transaction block, not a limit of 1000 rows per API invocation.
 
-## 3. 宿主创建 DataSource
+## 3. Create host DataSources
 
-下面代码属于宿主项目，可用你们已有的数据源工厂替代。需自行引入 Hikari；Oracle/PostgreSQL驱动已提供：
+The following code belongs to the host project; replace it with your existing factories if available. Add Hikari yourself; Oracle/PostgreSQL drivers are already supplied:
 
 ```java
 import com.zaxxer.hikari.HikariDataSource;
@@ -82,9 +82,9 @@ public final class HostDataSources {
 }
 ```
 
-这六个环境变量由宿主运行环境提供。密码需要解密时，在这个工厂里解密；IAM 应通过宿主支持动态 token 的 DataSource 获取新连接，不应把一次生成的 token 永久当作池密码。详见 [数据源与凭据](database-credentials.md)。
+The host runtime supplies these six environment variables. If passwords need decryption, decrypt them in this factory. IAM should obtain new connections through a host DataSource supporting dynamic tokens; do not permanently use a once-generated token as a pool password. See [DataSources and credentials](database-credentials.md).
 
-## 4. 在 main 里先迁移，再启动
+## 4. Migrate first, then start the host in main
 
 ```java
 import com.datamigration.api.MigrationRunner;
@@ -109,15 +109,15 @@ public class Application {
 }
 ```
 
-只有迁移成功才执行最后一行。这里没有启动临时 Spring 容器，宿主业务 Bean/Web 服务均在迁移后启动。Builder 的容量声明不创建或调整池；4 个连接足以运行一张单 worker 有键表。多表并发需按 [连接预算](configuration.md)计算。
+The last line runs only after migration succeeds. No temporary Spring context is started; host business beans and web services start after migration. Builder capacity declarations neither create nor resize pools. Four connections suffice for one keyed table with one worker. Calculate concurrent-table requirements using the [connection budget](configuration.md).
 
-源/目标池在本例属于迁移专用资源，所以由宿主的 try-with-resources 关闭；如果是随后宿主仍要使用的共享池，应由宿主保留其生命周期，只关闭 Runner。组件永远不会关闭传入的 DataSource。
+These pools are migration-specific resources in this example, so the host closes them with try-with-resources. If shared pools are needed by the host afterward, keep their lifecycle under host ownership and close only the Runner. The component never closes a supplied DataSource.
 
-configLocations 接受多个位置，后文件覆盖前文件；也支持 file: 路径（相对进程工作目录）。显式命令行参数优先，例如 `--data-migration.job-id=customer-import`。支持 Boot 的配置导入、环境变量和 profile；不创建 Bean 容器。不要向同一个 builder 同时传 environment 与 configLocations/arguments。
+configLocations accepts multiple locations; later files override earlier ones. file: paths are supported relative to the process working directory. Explicit command-line arguments take precedence, for example `--data-migration.job-id=customer-import`. Boot imports, environment variables, and profiles are supported without creating a bean context. Do not combine environment with configLocations/arguments on the same builder.
 
-## 5. 如果迁移发生在容器启动后
+## 5. Migration after the context starts
 
-两个 Bean 放在宿主扫描范围内，或使用 @Import 导入该配置类：
+Place both beans within the host's scan scope or @Import this configuration:
 
 ```java
 import com.datamigration.api.MigrationSource;
@@ -138,7 +138,7 @@ public class MigrationDataSourcesConfiguration {
 }
 ```
 
-在宿主 application.yml 导入迁移规则：
+Import migration rules in the host application.yml:
 
 ```yaml
 spring:
@@ -146,18 +146,18 @@ spring:
     import: classpath:migration.yml
 ```
 
-然后注入 `com.datamigration.api.MigrationService`，手动调用 `migrate()`。每端标记必须唯一，其他不带标记的宿主 DataSource 不会被选中。实例类型也可标注，但 @Bean 方法应声明可识别的 DataSource 类型。
+Inject `com.datamigration.api.MigrationService` and explicitly call `migrate()`. Each role must be unique; unmarked host DataSources are not selected. Implementation types may also carry annotations, but @Bean methods should declare recognizable DataSource types.
 
-**注解方式不能让普通宿主 Bean 在 .run() 前存在。** 要启动前迁移，请使用第 4 步的直接传对象方式；组件不注册 ApplicationRunner，不会启动后自动再跑一次。
+**Annotations cannot make ordinary host beans exist before .run().** For pre-startup migration use the direct-object entry in step 4. The component registers no ApplicationRunner and does not automatically migrate again after startup.
 
-## 6. 再次调用和重启
+## 6. Repeated calls and restarts
 
-同一个 Runner 重复 migrate，或重启后以同配置新建 Runner：成功表跳过，失败表恢复未完成块，序列收尾失败只重试收尾。保持 job-id、任务 name、实际数据源及全部迁移配置不变，不需要修改 YAML 来表示“我要恢复”。
+Call migrate again on the same Runner, or create a new Runner with the same configuration after restart: successful tables are skipped, failed tables resume unfinished blocks, and sequence finalization failures retry finalization only. Preserve job-id, task name, actual DataSources, and all migration rules. No YAML change is needed to request recovery.
 
-配置首次绑定成功后缓存，不热更新。源库后来新增数据，也不会因为重复调用就自动同步。同 job 恢复不支持修改 batch-size 等迁移规则，组件不计算配置摘要来检测变化。
+Configuration is cached after the first successful binding, with no hot reload. Later additions to the source database are not automatically synchronized by repeated calls. Changing batch-size or other rules and resuming the same job is unsupported; the component computes no digest to detect changes.
 
-方法同步返回 MigrationResult；有表失败时抛 MigrationException，通过 result().tables() 查看各表 committedRows、skippedRows、status 与脱敏错误。配置或数据源初始化错误可能抛其他运行时异常，也应阻止宿主启动。完整处理见 [运维指南](operations.md)。
+The method synchronously returns MigrationResult. Table failures throw MigrationException; inspect result().tables() for committedRows, skippedRows, status, and redacted errors. Configuration or DataSource initialization can throw other runtime exceptions and must also prevent host startup. See [operations](operations.md) for handling details.
 
-可运行实例位于 [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java)，使用独立 H2 合成数据，无需真实账号。
+A runnable example is [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java), using isolated H2 synthetic data without real accounts.
 
-同一 JVM 仅允许一次迁移执行，不同 Runner / Spring Context 的重叠调用立即失败；单次执行内部仍可多表、批次并发。部署方保证任意时刻只有一个迁移进程。仅支持和验证 JDK 17。审计结构与恢复边界见 [审计设计](audit.md)。
+Only one migration executes per JVM. Overlapping calls from different Runners/Spring contexts fail immediately; table and batch concurrency inside one call remains available. Deployment must ensure only one migration process runs at a time. Only JDK 17 is supported and verified. See [audit design](audit.md) for schema and recovery boundaries.
