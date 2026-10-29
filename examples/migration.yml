@@ -1,166 +1,26 @@
-# Oracle -> PostgreSQL 配置模板（Java 17 / Spring Boot 4.1.1）。
-# 使用：复制到宿主项目根目录 migration-local.yml，在 application.yml 中导入：
-# spring:
-#   config:
-#     import: file:./migration-local.yml
-# 填写下方 MIGRATION_* 环境变量，或在本地文件中填写真实连接信息。
-# 请勿将填写了真实账号、密码、内网地址的本地文件提交到 Git。
-# 源数据在迁移和恢复期间保持不变，目标暂停业务写入；业务表、审计表、序列需预建。
-
+# Host supplies both DataSources; these are migration rules only.
 data-migration:
-  # 必填：本轮迁移的稳定标识，最长 120 字符，以字母或数字开头，后续允许字母/数字/_.-。
-  # 故障恢复保持相同 job-id 和任务 name；已成功任务不会再插入。
-  # 重新做一轮全量导入需新 job-id，且明确选择 CLEAR_AND_REIMPORT 模式。
-  job-id: oracle-to-pg-demo
-
-  # 默认 false：只控制是否在 Spring Boot 启动时同步执行。
-  # false 时仍可注入 MigrationService 并调用 migrate()。
-  # true 时启动自动执行，迁移失败会导致应用启动失败。
-  run-on-startup: false
-
-  # 源库（读取端）。不与宿主的默认 DataSource 共用连接池。
-  source:
-    # 必填 JDBC URL，例如 jdbc:oracle:thin:@//host:1521/service_name。
-    # TLS 参数通过 JDBC URL / 驱动支持的证书配置提供，详见 docs/cloud-deployment.md。
-    jdbc-url: ${MIGRATION_SOURCE_URL}
-    # 必填：源库账号，建议仅授予所需数据表的 SELECT 权限。
-    username: ${MIGRATION_SOURCE_USERNAME}
-    # 必填：源库密码；测试库无密码可写空字符串 ""。
-    password: ${MIGRATION_SOURCE_PASSWORD}
-    # 必填：JDBC 驱动类名。宿主需另行引入对应驱动依赖。
-    driver-class-name: oracle.jdbc.OracleDriver
-    pool:
-      # 最大连接数，默认 4，>=1。必须结合表并发和 worker-count 计算，见文末。
-      maximum-pool-size: 4
-      # 最小空闲连接数，默认 0，范围 0..maximum-pool-size。
-      minimum-idle: 0
-      # 从池中等待可用连接的超时，默认 30s，至少 250ms；不是 SQL 执行超时。
-      connection-timeout: 30s
-      # 空闲连接回收时间，默认 10m；0 禁用，否则至少 10s。
-      idle-timeout: 10m
-      # 单个连接的最大生命周期，默认 30m；0 禁用，否则至少 30s。
-      # 建议小于数据库/网络设施对连接的存活限制，不会在事务中途强制回收借出的连接。
-      max-lifetime: 30m
-
-  # 目标库（写入端）。连接字段含义与 source 相同，拥有独立连接池。
-  target:
-    # 必填，例如 jdbc:postgresql://host:5432/database。
-    jdbc-url: ${MIGRATION_TARGET_URL}
-    # 必填；需要业务表 INSERT、审计表 SELECT/INSERT/UPDATE 等权限。
-    # CLEAR_AND_REIMPORT 还需要业务表 DELETE 权限；序列校准需要相应序列权限。
-    username: ${MIGRATION_TARGET_USERNAME}
-    password: ${MIGRATION_TARGET_PASSWORD}
-    driver-class-name: org.postgresql.Driver
-    pool:
-      # 默认也是 4，本例显式设为 5，为后续增加 worker 留出容量。
-      maximum-pool-size: 5
-      minimum-idle: 0
-      connection-timeout: 30s
-      idle-timeout: 10m
-      max-lifetime: 30m
-
-  # 全局迁移策略，作用于所有启用的表任务，目前不支持在单表下覆盖这些字段。
+  job-id: customer-import
   strategy:
-    # JDBC 读取提示，默认 1000，>=1；驱动如何预取由数据库/驱动决定。
-    # 不是提交行数，也不是整表加载到内存的行数。
-    fetch-size: 1000
-    # 单次 executeBatch 的最大行数，默认 500，>=1。
-    # 还会受事务边界和 max-batch-bytes 限制；LOB 行采用流式单行写入。
-    batch-size: 500
-    # 有键表：每个目标事务处理的源记录数，默认 2000，>=1，包含被跳过的记录。
-    # 本例每个事务最多处理 2000 行，可分 4 次各 500 行 executeBatch，再统一提交。
-    # 无键表：始终整表一个事务，该值不会使其分批提交。
-    commit-size: 2000
-    # 每个 job-id、每张表累计允许跳过的行级数据错误数，默认 0，>=0；续传不清零。
-    # 超过预算则回滚当前事务块并使该表失败；之前已提交的块保留。
-    # 网络/权限/SQL/结构错误不可跳过；无键表始终不允许跳过，失败整表回滚。
+    max-concurrent-tables: 1
     skip-limit: 0
-    # 每次事务块执行中，初次尝试以外允许的瞬时错误重试次数，默认 3，>=0。
-    # 仅在确认回滚或核实未提交时重试；无法确认提交结果时报告 COMMIT_UNKNOWN。
     transient-retry-count: 3
-    # 重试初始等待，默认 1s，必须 >0；后续按指数退避。
     retry-initial-backoff: 1s
-    # 单次重试等待上限，默认 10s，必须 >= 初始等待。
     retry-max-backoff: 10s
-    # 同时运行的表任务数上限，默认 4，>=1；与单表 worker-count 是两层并发。
-    # 本例只启用 1 张表，实际只执行 1 个表任务。A 表失败不阻止其他表继续完成。
-    max-concurrent-tables: 4
-    # 普通 JDBC batch 中转换值的估算字节预算，默认 16MB，必须 >0。
-    # 接近上限会提前 executeBatch；单行可能超过此值，它不是 JVM 内存硬上限。
     max-batch-bytes: 16MB
-    # 单字段大小上限，默认 32MB，必须 >0；也用于普通字符串/二进制值。
-    # BLOB 按字节，CLOB 按 UTF-16 字符数乘 2 估算；超限按数据错误处理。
     max-lob-size: 32MB
     audit:
-      # 默认 true；当前实现要求开启，false 会校验失败，因为恢复和执行锁依赖审计表。
-      enabled: true
-      # 目标库中预建的审计/检查点表，默认 migration_audit，可写 schema.table。
-      # DDL：src/main/resources/db/postgresql/migration-audit.sql。
-      # 改表名时需同步修改 DDL；不要清空运行中的检查点/锁记录。
       table-name: migration_audit
-
-  # 每个列表元素为一个表任务，可继续添加。至少启用一个；任务名和启用的目标表不能重复。
   tables:
-    # 必填：稳定任务名，最长 200 字符，建议使用简单英文名，故障恢复时保持不变。
     - name: customer
-      # 默认 true：是否参与本次迁移；关闭的任务仍要填写有效的配置结构。
-      enabled: true
-      # 必填：预先创建的目标表，必须与 insert-sql 的目标一致。
-      # 表/序列名只支持简单 table 或 schema.table，不能填写带引号的特殊标识符。
-      target-table: public.customer
-      # SELECT 结果中能唯一、非空标识一行的列标签（别名），不是目标表列名。
-      # 单键：[CUSTOMER_ID]；联合键：[TENANT_ID, CUSTOMER_ID]；无键：[]。
-      # 有键时按该顺序排序并保存批次边界；预检会检查唯一性与非空性。
-      primary-key: [CUSTOMER_ID]
-      # 单张表同时执行的事务块数，默认 1，>=1；无键表必须为 1。
+      batch-size: 1000
+      target-table: customer_copy
+      primary-key: [ID]
       worker-count: 1
-      # 默认 APPEND_RESUME：追加写入，同 job-id 继续未完成批次，不自动 upsert/去重。
-      # CLEAR_AND_REIMPORT：显式允许先 DELETE 目标数据再导入，不使用 TRUNCATE。
-      # 有键表先提交清除和准备标记再分块迁移，失败后可能已部分导入；同 job-id 恢复不再清除。
-      # 无键表的 DELETE、全部 INSERT 和成功检查点在一个事务中，失败保留原目标数据。
       mode: APPEND_RESUME
-      sequence:
-        # 默认 false：是否在数据提交完成后校准目标序列。
-        # 仅支持递增步长为 1 的非循环序列；保持已有更高水位，不回退。
-        # 收尾失败会报告 FINALIZATION_FAILED；同 job-id 重试只做收尾，不重新插入。
-        enabled: false
-        # 开启校准时必填：预先创建的目标命名序列，不是源库序列。
-        name: public.customer_id_seq
-        # 开启校准时必填：目标表中用于计算 MAX 的整数 ID 列，值需能精确表示为 BIGINT。
-        # 校准后序列下一值大于该目标列最大值；不读取源序列 NEXTVAL。
-        target-column: id
-      # 必填：不带动态参数的单个 SELECT；可以保留 ORDER BY，框架会在外层包装范围条件。
-      # 不支持 CTE、FOR UPDATE 等；建议显式列出列与唯一别名，源账号只授予读取权限。
-      select-sql: |
-        SELECT ID AS CUSTOMER_ID,
-               NAME AS CUSTOMER_NAME,
-               CREATED_AT AS CREATED_AT
-        FROM LEGACY_CUSTOMER
-      # 必填：单行 INSERT VALUES 模板。? 的绑定顺序就是下方 fields 的列表顺序。
-      # 不支持 INSERT SELECT、多行 VALUES、ON CONFLICT/upsert、RETURNING。
-      insert-sql: |
-        INSERT INTO public.customer (id, name, created_at)
-        VALUES (?, ?, ?)
-      # 必填、有序且非空；每个映射对应一个 ?，以下 3 项依次绑定参数 1/2/3。
+      select-sql: SELECT ID, NAME, AMOUNT FROM BUSINESS.CUSTOMER ORDER BY ID
+      insert-sql: INSERT INTO customer_copy(id, name, amount) VALUES (?, ?, ?)
       fields:
-        # SELECT 结果列标签，不是 SELECT 之前的物理列名；按标签忽略大小写匹配。
-        - source-column: CUSTOMER_ID
-          # 目标 JDBC 类型（java.sql.JDBCType 枚举），用于转换、绑定和 SQL NULL 的类型声明。
-          target-jdbc-type: BIGINT
-        - source-column: CUSTOMER_NAME
-          target-jdbc-type: VARCHAR
-        - source-column: CREATED_AT
-          # 根据业务时区选择 TIMESTAMP / TIMESTAMP_WITH_TIMEZONE，不由组件猜测时区。
-          target-jdbc-type: TIMESTAMP
-
-# 连接预算：每张同时运行的有键表，源需要 worker-count+1 个连接，目标需要 worker-count+2 个。
-# 每张无键表固定需要 1 个源连接、3 个目标连接；多表取最大同时执行组合求和。
-# 本例 1 张有键表、worker-count=1，至少需要源 2 / 目标 3，当前 4 / 5 足够。
-# 如果启用 4 张有键表、每张 worker-count=2，则至少源 12 / 目标 16，须同时增大池容量。
-#
-# 联合键示例：primary-key: [TENANT_ID, CUSTOMER_ID]，SELECT 必须返回这两个唯一非空列标签。
-# 无键表示例：primary-key: []、worker-count: 1，整表一个目标事务，失败下次从头重读。
-# BLOB -> PostgreSQL bytea：SELECT 返回 BLOB 列，字段 target-jdbc-type 可选 VARBINARY。
-# CLOB -> PostgreSQL text：字段 target-jdbc-type 可选 LONGVARCHAR。
-# 常用类型：BIGINT、INTEGER、DECIMAL、VARCHAR、DATE、TIMESTAMP、TIMESTAMP_WITH_TIMEZONE、VARBINARY。
-# 所有字段名严格校验，拼错或自行添加未知字段会失败；没有 data-migration.enabled 总开关。
+        - {source-column: ID, target-jdbc-type: BIGINT}
+        - {source-column: NAME, target-jdbc-type: VARCHAR}
+        - {source-column: AMOUNT, target-jdbc-type: DECIMAL}

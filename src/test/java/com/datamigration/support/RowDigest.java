@@ -15,7 +15,7 @@ public record RowDigest(long rows, String sha256) {
                                  int timeoutSeconds) throws Exception {
         // Reuse the production SELECT policy, including rejecting multi-statement/mutating queries.
         com.datamigration.sql.SqlSupport.query(new TableTask(task.name(), sql, task.insertSql(), task.fields(),
-                task.targetTable(), task.primaryKey(), task.workerCount(), task.mode(), task.sequence()));
+                task.targetTable(), task.primaryKey(), task.workerCount(), task.mode(), task.sequence(), 100));
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long count = 0;
         try (var statement = connection.createStatement()) {

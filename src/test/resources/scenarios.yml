@@ -1,9 +1,5 @@
 data-migration:
-  run-on-startup: false
   strategy:
-    fetch-size: 100
-    batch-size: 100
-    commit-size: 100
     skip-limit: 2
     max-concurrent-tables: 2
     max-batch-bytes: 1MB
@@ -13,6 +9,7 @@ data-migration:
       table-name: migration_audit
   tables:
     - name: customer
+      batch-size: 100
       target-table: CUSTOMER
       primary-key: []
       worker-count: 1
@@ -27,6 +24,7 @@ data-migration:
         - source-column: AMOUNT
           target-jdbc-type: DECIMAL
     - name: documents
+      batch-size: 100
       target-table: DOCUMENTS
       primary-key: [ID]
       worker-count: 1
@@ -41,6 +39,7 @@ data-migration:
         - source-column: NOTES
           target-jdbc-type: VARCHAR
     - name: orders
+      batch-size: 100
       target-table: ORDERS
       primary-key: [TENANT,ID]
       worker-count: 3

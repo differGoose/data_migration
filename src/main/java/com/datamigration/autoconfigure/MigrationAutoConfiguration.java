@@ -1,70 +1,82 @@
 package com.datamigration.autoconfigure;
 
-import com.datamigration.api.MigrationService;
+import com.datamigration.api.*;
+import com.datamigration.conversion.*;
 import com.datamigration.execution.MigrationEngine;
-import com.datamigration.execution.JdbcMigrationEngine;
-import com.datamigration.conversion.ValueConverter;
-import com.datamigration.conversion.JdbcValueConverter;
+import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.properties.MigrationConfiguration;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Lazy;
+import org.springframework.context.annotation.*;
 import org.springframework.core.env.Environment;
+import javax.sql.DataSource;
+import java.lang.annotation.Annotation;
+import java.util.*;
 
 @AutoConfiguration
 public class MigrationAutoConfiguration {
-    @Bean
-    @ConditionalOnMissingBean(ValueConverter.class)
+    @Bean @ConditionalOnMissingBean(ValueConverter.class)
     ValueConverter migrationValueConverter() { return new JdbcValueConverter(); }
-
-    @Bean(destroyMethod = "close")
-    @Lazy
-    @ConditionalOnMissingBean(MigrationEngine.class)
-    JdbcMigrationEngine migrationEngine(MigrationConfiguration configuration, MigrationConnectionPools pools,
-                                        ValueConverter converter) {
-        var properties = configuration.get();
-        return new JdbcMigrationEngine(pools, properties.source().pool().maximumPoolSize(),
-                properties.target().pool().maximumPoolSize(),
-                properties.source().jdbcUrl() + "|" + properties.source().username() + "|" +
-                properties.target().jdbcUrl() + "|" + properties.target().username(), converter);
+    @Bean @ConditionalOnMissingBean
+    MigrationConfiguration migrationConfiguration(Environment environment) { return new MigrationConfiguration(environment); }
+    @Bean @Lazy @ConditionalOnMissingBean
+    DataSourceConnections migrationConnections(ConfigurableListableBeanFactory beans) {
+        return new DataSourceConnections(find(beans, MigrationSource.class).dataSource(), find(beans, MigrationTarget.class).dataSource());
     }
-
-    @Bean
-    @ConditionalOnMissingBean
-    MigrationConfiguration migrationConfiguration(Environment environment) {
-        return new MigrationConfiguration(environment);
+    @Bean(destroyMethod = "close") @ConditionalOnMissingBean(MigrationService.class)
+    SpringMigrationService migrationService(Environment environment, MigrationConfiguration configuration,
+            ConfigurableListableBeanFactory beans, ValueConverter converter, ObjectProvider<MigrationEngine> engines) {
+        return new SpringMigrationService(environment, configuration, beans, converter, engines);
     }
-
-    @Bean(destroyMethod = "close")
-    @Lazy
-    @ConditionalOnMissingBean
-    MigrationConnectionPools migrationConnectionPools(MigrationConfiguration configuration,
-            org.springframework.beans.factory.BeanFactory beanFactory) {
-        var properties = configuration.get();
-        return new MigrationConnectionPools(properties.source(), properties.target(),
-                name -> beanFactory.getBean(name, com.datamigration.api.DatabaseCredentialsProvider.class));
+    private record Endpoint(DataSource dataSource, int capacity) { }
+    private static Endpoint find(ConfigurableListableBeanFactory beans, Class<? extends Annotation> role) {
+        List<String> matches = new ArrayList<>();
+        for (String name : beans.getBeanNamesForType(DataSource.class, true, false))
+            if (beans.findAnnotationOnBean(name, role) != null) matches.add(name);
+        if (matches.size() != 1) throw new IllegalArgumentException("Require exactly one @" + role.getSimpleName() + " DataSource");
+        String name = matches.get(0);
+        int capacity = role == MigrationSource.class ? beans.findAnnotationOnBean(name, MigrationSource.class).capacity()
+                : beans.findAnnotationOnBean(name, MigrationTarget.class).capacity();
+        if (capacity < 1) throw new IllegalArgumentException("Migration capacity must be positive");
+        return new Endpoint(beans.getBean(name, DataSource.class), capacity);
     }
-
-    @Bean
-    @ConditionalOnMissingBean(MigrationService.class)
-    MigrationService migrationService(MigrationConfiguration configuration, ObjectProvider<MigrationEngine> engines) {
-        return () -> {
-            var plan = configuration.get().toPlan();
-            MigrationEngine engine = engines.getIfAvailable();
-            if (engine == null) {
-                throw new IllegalStateException("No MigrationEngine is available; check custom engine bean configuration.");
+    public static final class SpringMigrationService implements MigrationService, AutoCloseable {
+        private final Environment environment;
+        private final MigrationConfiguration configuration;
+        private final ConfigurableListableBeanFactory beans;
+        private final ValueConverter converter;
+        private final ObjectProvider<MigrationEngine> engines;
+        private MigrationRunner runner;
+        private boolean closed;
+        SpringMigrationService(Environment environment, MigrationConfiguration configuration,
+                ConfigurableListableBeanFactory beans, ValueConverter converter, ObjectProvider<MigrationEngine> engines) {
+            this.environment=environment; this.configuration=configuration; this.beans=beans; this.converter=converter; this.engines=engines;
+        }
+        public MigrationResult migrate() {
+            synchronized (this) {
+                if (closed) throw new IllegalStateException("Migration service is closed");
             }
-            return engine.execute(plan);
-        };
-    }
-
-    @Bean
-    @ConditionalOnProperty(prefix = "data-migration", name = "run-on-startup", havingValue = "true")
-    ApplicationRunner migrationStartupRunner(MigrationService service) {
-        return arguments -> service.migrate();
+            configuration.get();
+            MigrationEngine custom = engines.getIfAvailable();
+            if (custom != null) return custom.execute(configuration.get().toPlan());
+            MigrationRunner current;
+            synchronized (this) {
+                if (closed) throw new IllegalStateException("Migration service is closed");
+                if (runner == null) {
+                    var source=find(beans, MigrationSource.class); var target=find(beans, MigrationTarget.class);
+                    runner=MigrationRunner.builder().source(source.dataSource(), source.capacity())
+                        .target(target.dataSource(), target.capacity()).environment(environment).converter(converter).build();
+                }
+                current=runner;
+            }
+            return current.migrate();
+        }
+        public void close() {
+            MigrationRunner current;
+            synchronized (this) { closed=true; current=runner; }
+            if (current != null) current.close();
+        }
     }
 }

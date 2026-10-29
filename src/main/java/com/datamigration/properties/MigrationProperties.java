@@ -18,10 +18,7 @@ import java.util.Set;
 @Validated
 @ConfigurationProperties(prefix = "data-migration", ignoreUnknownFields = false)
 public record MigrationProperties(
-        @DefaultValue("false") boolean runOnStartup,
         @NotBlank @Pattern(regexp = "[A-Za-z0-9][A-Za-z0-9_.-]{0,119}") String jobId,
-        @NotNull @Valid Endpoint source,
-        @NotNull @Valid Endpoint target,
         @DefaultValue @Valid Strategy strategy,
         @NotEmpty List<@NotNull @Valid Table> tables) {
 
@@ -47,8 +44,7 @@ public record MigrationProperties(
     }
 
     public MigrationPlan toPlan() {
-        return new MigrationPlan(jobId, new MigrationStrategy(strategy.fetchSize(), strategy.batchSize(),
-                strategy.commitSize(), strategy.skipLimit(), strategy.transientRetryCount(),
+        return new MigrationPlan(jobId, new MigrationStrategy(strategy.skipLimit(), strategy.transientRetryCount(),
                 strategy.retryInitialBackoff(), strategy.retryMaxBackoff(), strategy.maxConcurrentTables(),
                 strategy.audit().enabled(), strategy.audit().tableName(),
                 strategy.maxBatchBytes().toBytes(), strategy.maxLobSize().toBytes()),
@@ -56,56 +52,14 @@ public record MigrationProperties(
                     .map(t -> new TableTask(t.name(), t.selectSql(), t.insertSql(),
                         t.fields().stream().map(f -> new FieldMapping(f.sourceColumn(), f.targetJdbcType())).toList(),
                         t.targetTable(), t.primaryKey(), t.workerCount(), t.mode(),
-                        new SequenceSpec(t.sequence().enabled(), t.sequence().name(), t.sequence().targetColumn())))
+                        new SequenceSpec(t.sequence().enabled(), t.sequence().name(), t.sequence().targetColumn()), t.batchSize()))
                     .toList());
     }
 
     // Do not expose SQL or endpoint credentials through generated record diagnostics.
     @Override public String toString() { return "MigrationProperties[redacted]"; }
 
-    public record Endpoint(
-            @NotBlank @Pattern(regexp = "^jdbc:.*", message = "must be a JDBC URL") String jdbcUrl,
-            @NotBlank String username,
-            String password,
-            @NotBlank String driverClassName,
-            @DefaultValue @Valid Pool pool,
-            String credentialsProvider) {
-        @org.springframework.boot.context.properties.bind.ConstructorBinding
-        public Endpoint {}
-        public Endpoint(String jdbcUrl, String username, String password, String driverClassName, Pool pool) {
-            this(jdbcUrl, username, password, driverClassName, pool, null);
-        }
-        @AssertTrue(message = "password is required unless credentials-provider is configured; provider name must not be blank")
-        public boolean isCredentialsValid() {
-            return credentialsProvider == null ? password != null : !credentialsProvider.isBlank();
-        }
-        @Override public String toString() { return "Endpoint[redacted]"; }
-    }
-
-    public record Pool(
-            @DefaultValue("4") @Min(1) int maximumPoolSize,
-            @DefaultValue("0") @Min(0) int minimumIdle,
-            @DefaultValue("30s") Duration connectionTimeout,
-            @DefaultValue("10m") Duration idleTimeout,
-            @DefaultValue("30m") Duration maxLifetime) {
-        @AssertTrue(message = "minimum-idle must not exceed maximum-pool-size")
-        public boolean isSizeValid() { return minimumIdle <= maximumPoolSize; }
-
-        @AssertTrue(message = "connection-timeout >= 250ms; idle-timeout is 0 or >= 10s; max-lifetime is 0 or >= 30s")
-        public boolean isTimeoutsValid() {
-            return connectionTimeout != null && connectionTimeout.compareTo(Duration.ofMillis(250)) >= 0
-                    && validOptionalTimeout(idleTimeout, Duration.ofSeconds(10))
-                    && validOptionalTimeout(maxLifetime, Duration.ofSeconds(30));
-        }
-        private static boolean validOptionalTimeout(Duration value, Duration minimum) {
-            return value != null && (value.isZero() || value.compareTo(minimum) >= 0);
-        }
-    }
-
     public record Strategy(
-            @DefaultValue("1000") @Min(1) int fetchSize,
-            @DefaultValue("500") @Min(1) int batchSize,
-            @DefaultValue("2000") @Min(1) int commitSize,
             @DefaultValue("0") @Min(0) long skipLimit,
             @DefaultValue("3") @Min(0) int transientRetryCount,
             @DefaultValue("1s") Duration retryInitialBackoff,
@@ -143,7 +97,8 @@ public record MigrationProperties(
             @DefaultValue @Valid Sequence sequence,
             @NotBlank String selectSql,
             @NotBlank String insertSql,
-            @NotEmpty List<@NotNull @Valid Field> fields) {
+            @NotEmpty List<@NotNull @Valid Field> fields,
+            @DefaultValue("1000") @Min(1) int batchSize) {
         public Table { primaryKey = primaryKey == null ? List.of() : List.copyOf(primaryKey); }
         @AssertTrue(message = "keyless tables require worker-count=1; primary-key columns must be unique")
         public boolean isKeyValid() {

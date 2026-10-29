@@ -1,7 +1,7 @@
 package com.datamigration.support;
 
 import com.datamigration.api.*;
-import com.datamigration.autoconfigure.MigrationConnectionPools;
+import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.ValueConverter;
 import com.datamigration.execution.JdbcMigrationEngine;
 import com.datamigration.jdbc.ConnectionAccess;
@@ -23,7 +23,7 @@ public final class ResilienceWorker {
             properties.forEach((k, v) -> overrides.put(k.toString(), v));
             try (var context = ResilienceContexts.open(args[0], overrides)) {
                 var config = context.getBean(MigrationConfiguration.class).get();
-                var pools = context.getBean(MigrationConnectionPools.class);
+                var pools = context.getBean(DataSourceConnections.class);
                 var settings = ResilienceSettings.read(context.getEnvironment());
                 Set<String> inserts = new HashSet<>();
                 config.toPlan().tables().stream().filter(t -> t.name().equals(settings.triggerTask()))
@@ -50,10 +50,7 @@ public final class ResilienceWorker {
                         }, settings.scenario() == ResilienceSettings.Scenario.APP_BEFORE_COMMIT);
                     }
                 };
-                String identity = config.source().jdbcUrl() + "|" + config.source().username() + "|"
-                        + config.target().jdbcUrl() + "|" + config.target().username();
-                try (var engine = new JdbcMigrationEngine(access, config.source().pool().maximumPoolSize(),
-                        config.target().pool().maximumPoolSize(), identity, context.getBean(ValueConverter.class))) {
+                try (var engine = new JdbcMigrationEngine(access, 6, 6, pools.identity(), context.getBean(ValueConverter.class))) {
                     engine.execute(config.toPlan());
                 }
             }

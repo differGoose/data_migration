@@ -5,4 +5,5 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
 @EnableAutoConfiguration
+@org.springframework.context.annotation.Import(HostDataSources.class)
 public class ResilienceHost {}

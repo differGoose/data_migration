@@ -6,7 +6,7 @@
 
 1. 先按 [宿主接入指南](getting-started.md)用普通配置跑通方法调用、目标建表和字段映射。
 2. 由 DBA 确认数据库服务名、证书身份、CA、账号权限与网络端口，再配置下面的 TLS 连接。
-3. 如果密码已经可用，继续使用静态密码；只有需要解密、密钥服务或 IAM 时才添加 [凭据提供器](database-credentials.md)。
+3. 如果密码已经可用，继续使用静态密码；需要解密、密钥服务或 IAM 时，在 [宿主 DataSource 工厂](database-credentials.md) 中处理。
 4. 在真实 DEV 小范围试跑并比对字段，再用 [恢复测试](resilience-testing.md)验证中断续跑。
 5. 最后将同一宿主打包到容器，配置网络、证书、环境变量与运行身份；本机可连接不代表容器网络已打通。
 
@@ -19,7 +19,7 @@
 示例环境变量（主机、端口、服务名、DN 必须替换为 DBA 提供的值）：
 
 ```text
-MIGRATION_SOURCE_URL=jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=oracle.example.internal)(PORT=2484))(CONNECT_DATA=(SERVICE_NAME=DEV))(SECURITY=(SSL_SERVER_DN_MATCH=YES)(SSL_SERVER_CERT_DN="CN=oracle.example.internal")))
+SOURCE_JDBC_URL=jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCPS)(HOST=oracle.example.internal)(PORT=2484))(CONNECT_DATA=(SERVICE_NAME=DEV))(SECURITY=(SSL_SERVER_DN_MATCH=YES)(SSL_SERVER_CERT_DN="CN=oracle.example.internal")))
 ```
 
 将 CA 信任库以只读文件挂载给容器，通过 JVM 的 `javax.net.ssl.trustStore`、`javax.net.ssl.trustStoreType` 指向它。私钥/口令由运行环境的秘密管理机制提供，不提交到源码或镜像层；不要输出 JVM 秘密参数。双向 TLS 还需要客户端证书和私钥，具体 Wallet/PKCS12 配置由 DBA 和所选驱动确定。全局 JSSE 属性会影响宿主的其他 TLS 连接，应在独立迁移任务中配置并测试。
@@ -31,7 +31,7 @@ Oracle Thin 支持 TCPS、信任库及服务端身份匹配；参数细节以 [O
 宿主引入 `org.postgresql:postgresql`。本地/DEV 普通账号密码路径直接复用现有 YAML。目标 URL 示例：
 
 ```text
-MIGRATION_TARGET_URL=jdbc:postgresql://postgres.example.internal:5432/dev?sslmode=verify-full&sslrootcert=/run/certs/postgres-ca.pem
+TARGET_JDBC_URL=jdbc:postgresql://postgres.example.internal:5432/dev?sslmode=verify-full&sslrootcert=/run/certs/postgres-ca.pem
 ```
 
 `verify-full` 同时验证证书链和主机身份，CA 文件通过只读挂载提供；不能用 `sslmode=require` 代替完整身份验证。见 [pgJDBC TLS 文档](https://jdbc.postgresql.org/documentation/ssl/)。
@@ -40,22 +40,22 @@ MIGRATION_TARGET_URL=jdbc:postgresql://postgres.example.internal:5432/dev?sslmod
 
 ## IAM：当前边界和接入方案
 
-现已提供按端点选择的 DatabaseCredentialsProvider 扩展，每次创建物理连接时获取凭据。宿主负责 IAM token 生成与 AWS SDK 依赖，组件管理两个连接池。完整配置与 Bean 示例见 [自定义数据库凭据](database-credentials.md)。真实 IAM 仍需云端验收。
+组件现在只接收宿主 DataSource。宿主负责解密/IAM、JDBC驱动、连接池和超时，完整实现位置与新物理连接动态取token示例见 [宿主数据源与凭据](database-credentials.md)。不能在宿主尚未启动时依赖其普通 Spring Bean 自动注入；启动前使用可独立初始化的 Java 工厂。真实 IAM 仍需云端验收。
 
 ECS **task role** 用于应用的 AWS API 权限，**task execution role** 用于拉取镜像、日志及任务配置中的秘密注入；不要混用。依据 [AWS ECS IAM 角色说明](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/security-iam-roles.html) 配置最小权限，不在镜像中保存长期 access key。
 
 ## 作为 ECS 一次性任务运行
 
-该项目仍是普通依赖 JAR，不新增 runner Maven 子模块。由宿主提供一个非 Web Boot 启动类，参考 `examples/ecs/MigrationJobApplication.java`；将宿主打包为可执行 JAR。开启 run-on-startup，成功后关闭 Spring Context 正常退出；异常传播为非零进程退出码。宿主若已有常驻服务，不应将服务成功启动等同于一次性 ECS 任务已完成。
+该项目仍是普通依赖 JAR，不新增 runner Maven 子模块。由宿主提供一个非 Web Boot 启动类，参考 `examples/ecs/MigrationJobApplication.java`；将宿主打包为可执行 JAR。直接调用 MigrationRunner.migrate，成功后关闭 Runner 及宿主拥有的连接池并正常退出；异常传播为非零进程退出码。宿主若已有常驻服务，不应将服务成功启动等同于一次性 ECS 任务已完成。
 
 `examples/ecs/Dockerfile` 使用宿主产物 host.jar，构建前须完成宿主自己的构建。镜像和例子未在 ECS 部署验证。
 
 任务定义要点：
 
 - 使用独立一次性任务，配置所需 CPU/内存、日志、task role、execution role 和证书只读挂载。
-- `SPRING_MAIN_WEB_APPLICATION_TYPE=none`、`DATA_MIGRATION_RUN_ON_STARTUP=true`；配置文件通过 `SPRING_CONFIG_IMPORT=file:/run/config/migration.yml` 导入。
-- 两端 URL、用户名和密码通过环境与 secret 注入，保持 `MIGRATION_*` 变量名与示例 YAML 一致。IAM 路径通过 credentials-provider 指定宿主提供器，可省略 password。
-- 固定 `DATA_MIGRATION_JOB_ID`，ECS 重试同一工作时保持不变；仅在明确全量重导时换新 job-id 并启用 CLEAR_AND_REIMPORT。
+- 一次性任务不需要启动完整 Spring 容器；通过 Runner.configLocations("file:/run/config/migration.yml") 加载规则。
+- 两端 URL、用户名、密码或secret ID由宿主工厂通过环境/secret读取；变量命名与宿主工厂一致，不写入 data-migration 节。IAM DataSource在每次新物理连接时获取有效token。
+- 固定迁移 YAML 中的 `data-migration.job-id`（或命令行 `--data-migration.job-id=...`），ECS 重试同一工作时保持不变；仅在明确全量重导时换新 job-id 并启用 CLEAR_AND_REIMPORT。
 - 网络须能解析并访问 Oracle DEV TCPS 和目标 PostgreSQL 端口；容器内不能使用本地 H2 示例的 localhost 地址。
 - 审计保存在目标库，容器重建不丢检查点；证书和密码不写入任务日志。
 - 为中断/回滚预留停止宽限时间，并演练强制终止后的同 job-id 恢复。无键大事务的回滚耗时需按真实数据量评估。

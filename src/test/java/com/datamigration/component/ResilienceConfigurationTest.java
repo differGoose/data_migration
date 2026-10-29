@@ -19,8 +19,6 @@ class ResilienceConfigurationTest {
                   configuration-classes: [com.datamigration.support.ResilienceHost]
                 data-migration:
                   job-id: config-contract
-                  source: {jdbc-url: 'jdbc:h2:mem:source', username: sa, password: '', driver-class-name: org.h2.Driver}
-                  target: {jdbc-url: 'jdbc:h2:mem:target', username: sa, password: '', driver-class-name: org.h2.Driver}
                   tables:
                     - {name: old, target-table: OLD, select-sql: 'SELECT ID FROM OLD', insert-sql: 'INSERT INTO OLD VALUES (?)', fields: [{source-column: ID, target-jdbc-type: BIGINT}]}
                     - {name: other, target-table: OTHER, select-sql: 'SELECT ID FROM OTHER', insert-sql: 'INSERT INTO OTHER VALUES (?)', fields: [{source-column: ID, target-jdbc-type: BIGINT}]}

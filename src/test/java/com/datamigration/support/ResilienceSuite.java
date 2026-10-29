@@ -1,6 +1,6 @@
 package com.datamigration.support;
 
-import com.datamigration.autoconfigure.MigrationConnectionPools;
+import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.ValueConverter;
 import com.datamigration.model.TableTask;
 import com.datamigration.properties.MigrationConfiguration;
@@ -39,8 +39,8 @@ public final class ResilienceSuite {
                 overrides.put("resilience.target-proxy.port", target.port());
                 if (databases != null) {
                     overrides.putAll(databases.properties());
-                    overrides.put("data-migration.source.jdbc-url", databases.sourceUrl().replace(":" + sourcePort + "/", ":" + source.port() + "/"));
-                    overrides.put("data-migration.target.jdbc-url", databases.targetUrl().replace(":" + targetPort + "/", ":" + target.port() + "/"));
+                    overrides.put("host-databases.source.jdbc-url", databases.sourceUrl().replace(":" + sourcePort + "/", ":" + source.port() + "/"));
+                    overrides.put("host-databases.target.jdbc-url", databases.targetUrl().replace(":" + targetPort + "/", ":" + target.port() + "/"));
                     overrides.put("data-migration.job-id", "resilience-" + UUID.randomUUID());
                 }
                 writeManifest(location, overrides, output);
@@ -98,7 +98,7 @@ public final class ResilienceSuite {
         try (var context = ResilienceContexts.open(location, overrides)) {
             var settings = ResilienceSettings.read(context.getEnvironment());
             var config = context.getBean(MigrationConfiguration.class).get();
-            var pools = context.getBean(MigrationConnectionPools.class);
+            var pools = context.getBean(DataSourceConnections.class);
             var converter = context.getBean(ValueConverter.class);
             var trigger = config.toPlan().tables().stream().filter(t -> t.name().equals(settings.triggerTask()))
                     .findFirst().orElseThrow(() -> new IllegalArgumentException("Unknown trigger-task"));
@@ -119,7 +119,7 @@ public final class ResilienceSuite {
                     RowDigest targetDigest = RowDigest.read(target, validation.targetSql(), task, converter, timeout);
                     actual.put(task.name(), sourceDigest);
                     if (preflight) {
-                        require(sourceDigest.rows() > (long) config.strategy().commitSize()
+                        require(sourceDigest.rows() > (long) task.batchSize()
                                         * (task.name().equals(settings.triggerTask()) ? settings.triggerCommit() : task.workerCount()),
                                 "Source range must exceed the configured trigger commit so a fault interrupts unfinished work");
                         require(targetDigest.rows() == 0, "DEV target validation range must be empty before a new scenario");
@@ -136,7 +136,7 @@ public final class ResilienceSuite {
                                     || settings.scenario() == ResilienceSettings.Scenario.APP_AFTER_COMMIT) {
                                 long commits = settings.triggerCommit()
                                         - (settings.scenario() == ResilienceSettings.Scenario.APP_BEFORE_COMMIT ? 1 : 0);
-                                require(targetDigest.rows() == commits * config.strategy().commitSize(),
+                                require(targetDigest.rows() == commits * task.batchSize(),
                                         "Host crash did not preserve the expected business commit boundary");
                             }
                         }
@@ -188,7 +188,7 @@ public final class ResilienceSuite {
             manifest.setProperty("phases", "fault,resume,repeat");
             manifest.setProperty("source-proxy-port", overrides.get("resilience.source-proxy.port").toString());
             manifest.setProperty("target-proxy-port", overrides.get("resilience.target-proxy.port").toString());
-            manifest.setProperty("commit-size", Integer.toString(config.strategy().commitSize()));
+            config.toPlan().tables().forEach(task -> manifest.setProperty("batch-size." + task.name(), Integer.toString(task.batchSize())));
             try (var writer = Files.newBufferedWriter(output.resolve("manifest.properties"))) {
                 manifest.store(writer, "Secret-free execution manifest");
             }

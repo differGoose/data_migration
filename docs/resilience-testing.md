@@ -12,7 +12,7 @@ mvn -B -ntp verify "-Dit.test=ConfiguredResilienceIT" "-Dresilience.config=file:
 
 `resilience.config` 是 Spring 配置位置的逗号分隔列表，后加载文件覆盖前面的同名配置；入口的 `resilience.scenario` 覆盖 YAML 中的场景。Spring 的列表是**整体替换**，不是按下标或任务名合并：覆盖 `data-migration.tables`、`fields` 或 `resilience.configuration-classes` 时必须写出完整列表。`ResilienceConfigurationTest` 验证这些语义。
 
-公共配置在 `examples/resilience/scenarios.yml`，H2 与 DEV 示例分别在 `h2.yml` 和 `oracle-postgresql.yml`。`data-migration` 仍负责连接、SQL、表映射和策略；`resilience` 独立描述环境、场景、超时、代理、触发点和校验查询。
+公共配置在 `examples/resilience/scenarios.yml`，H2 与 DEV 示例分别在 `h2.yml` 和 `oracle-postgresql.yml`。`data-migration` 只负责 SQL、表映射和策略，连接由测试宿主创建 DataSource；`resilience` 独立描述环境、场景、超时、代理、触发点和校验查询。
 
 可选场景：
 
@@ -23,7 +23,7 @@ mvn -B -ntp verify "-Dit.test=ConfiguredResilienceIT" "-Dresilience.config=file:
 | `APP_BEFORE_COMMIT` | 指定业务提交前，强制结束宿主 JVM |
 | `APP_AFTER_COMMIT` | 指定业务提交成功后，强制结束宿主 JVM |
 
-`trigger-task` 是启用任务的 `name`；`trigger-commit` 从 1 开始，按该任务的业务提交计数，不含审计提交。触发任务必须 `worker-count: 1`，避免并发提交顺序不确定；数据量必须大于触发提交批次乘以 `commit-size`。公共示例在第 2 次提交触发，四个 H2 场景均验证已有部分结果的恢复。
+`trigger-task` 是启用任务的 `name`；`trigger-commit` 从 1 开始，按该任务的业务提交计数，不含审计提交。触发任务必须 `worker-count: 1`，避免并发提交顺序不确定；数据量必须大于触发提交批次乘以 触发表的 `batch-size`。公共示例在第 2 次提交触发，四个 H2 场景均验证已有部分结果的恢复。
 
 父进程持有两个 TCP 代理，宿主在独立 JVM 执行。JDBC 装饰器按配置生成的完整 `insert-sql` 匹配已执行的业务写入，利用本地控制目录中的 `ready` / `release` 文件握手，父进程确认故障注入后才允许继续。无需固定时间等待或固定业务表名。每个阶段受 `phase-timeout` 约束；超时会终止子进程。数据库故障必须导致本轮迁移失败，再恢复代理并启动新的宿主 JVM；没有为迁移引擎增加无限重试或自动恢复。
 
@@ -44,7 +44,9 @@ DEV 验收前应配置 JDBC 驱动连接/读取超时，避免父进程预检的
 
 ## 动态凭据与 TLS
 
-支持 `data-migration.source.credentials-provider` / `target.credentials-provider`；将宿主的解密或 IAM 配置类全名放入 `resilience.configuration-classes`，类必须位于 test classpath。框架在父进程及全部子进程都注册这些类。提供器配置见 [数据库凭据扩展](database-credentials.md)。启用提供器时可不设置明文密码环境变量。
+宿主配置类在父进程及全部子进程注册，放入 `resilience.configuration-classes`（完整类名、在 test classpath 中）。它应提供两个带 `@MigrationSource(capacity=...)` / `@MigrationTarget(capacity=...)` 的 DataSource Bean，自行处理解密或 IAM。Bean 建议 @Lazy，以便预读场景时不抢先解析尚未分配的代理端口。组件本身不识别连接密码或凭据提供器。
+
+仓库的 `HostDataSources` 是测试宿主设施，提供默认 Hikari 数据源并在关闭测试上下文时销毁。DEV 示例中的 host-databases 节是该测试宿主的配置，不是迁移组件配置；使用自定义数据源配置类时删除默认 host-databases 节，避免重复标记。测试宿主默认容量和池大小均为10；自定义宿主按自己的真实容量声明。源/目标 JDBC URL 必须经过父代理的 `${resilience.source-proxy.port}` / `${resilience.target-proxy.port}`。完整职责见 [宿主数据源](database-credentials.md)。
 
 TCP 代理原样转发字节，TLS 仍端到端验证。PostgreSQL `verify-full` 或 Oracle TCPS 使用的证书主机名必须解析到本地代理，代理 upstream 则必须独立解析到真实服务器；不要把 upstream 也解析回本机形成循环。IAM token 应按真实服务端主机和端口签发，不能使用临时代理端口签发。Oracle RAC 重定向、多地址故障转移等可能绕开代理的配置不适合该测试；预检要求两端都实际经过代理。
 
@@ -54,4 +56,4 @@ TCP 代理原样转发字节，TLS 仍端到端验证。PostgreSQL `verify-full`
 
 验收包括：故障已触发且本轮未完成、宿主崩溃的提交前后行数边界、源数据摘要未改变、恢复后目标行数及字段摘要与源一致、汇总和成功批次审计合计一致，以及再次执行保持数据/审计合计不变。数据摘要按映射类型归一化并流式计算，不保存业务数据。
 
-`DevHarnessContractIT` 使用人工预备的本地 H2 模拟 DEV 路径，验证凭据 Bean、非空目标拒绝及完整续跑；它不代表真实 Oracle/PostgreSQL、IAM 或 TCPS 已通过验收。
+`DevHarnessContractIT` 使用人工预备的本地 H2 模拟 DEV 路径，验证宿主 DataSource Bean、非空目标拒绝及完整续跑；它不代表真实 Oracle/PostgreSQL、IAM 或 TCPS 已通过验收。

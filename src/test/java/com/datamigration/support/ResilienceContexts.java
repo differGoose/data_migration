@@ -21,7 +21,7 @@ public final class ResilienceContexts {
                     }
                 })
                 .run("--spring.config.location=" + location, "--spring.main.web-application-type=none",
-                        "--spring.main.banner-mode=off", "--data-migration.run-on-startup=false",
+                        "--spring.main.banner-mode=off",
                         "--logging.level.root=OFF");
     }
 }

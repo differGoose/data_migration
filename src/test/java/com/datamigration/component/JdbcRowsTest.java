@@ -19,10 +19,10 @@ class JdbcRowsTest {
     private TableTask task(JDBCType type) {
         return new TableTask("A", "SELECT V FROM A", "INSERT INTO A VALUES (?)",
                 List.of(new FieldMapping("V", type)), "A", List.of(), 1,
-                TableTask.Mode.APPEND_RESUME, new SequenceSpec(false, null, null));
+                TableTask.Mode.APPEND_RESUME, new SequenceSpec(false, null, null), 100);
     }
     private MigrationStrategy strategy(long bytes, long lob) {
-        return new MigrationStrategy(10, 10, 10, 0, 0, Duration.ofMillis(1), Duration.ofMillis(1),
+        return new MigrationStrategy( 0, 0, Duration.ofMillis(1), Duration.ofMillis(1),
                 1, true, "migration_audit", bytes, lob);
     }
     private ResultSet source(JDBCType type, int rows) throws Exception {

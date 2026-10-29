@@ -16,8 +16,13 @@ class DevHarnessContractIT {
     @TempDir Path directory;
     @Configuration(proxyBeanMethods = false)
     public static class Credentials {
-        @Bean DatabaseCredentialsProvider harnessCredentials() {
-            return (role, endpoint) -> new DatabaseCredentials(endpoint.username(), "");
+        @Bean @Lazy @MigrationSource(capacity=6)
+        javax.sql.DataSource externalSource(org.springframework.core.env.Environment env) {
+            return new org.springframework.jdbc.datasource.DriverManagerDataSource(env.getRequiredProperty("test.source-url"), "sa", "");
+        }
+        @Bean @Lazy @MigrationTarget(capacity=6)
+        javax.sql.DataSource externalTarget(org.springframework.core.env.Environment env) {
+            return new org.springframework.jdbc.datasource.DriverManagerDataSource(env.getRequiredProperty("test.target-url"), "sa", "");
         }
     }
     @Test void externalConfigurationAndCredentialBeansWorkWithoutDevFixtureMutation() throws Exception {
@@ -35,10 +40,9 @@ class DevHarnessContractIT {
                 int port = URI.create(url.substring("jdbc:h2:".length())).getPort();
                 properties.setProperty("resilience." + side + "-proxy.upstream-host", "127.0.0.1");
                 properties.setProperty("resilience." + side + "-proxy.upstream-port", "" + port);
-                properties.setProperty("data-migration." + side + ".jdbc-url", url.replace(":" + port + "/",
+                properties.setProperty("test." + side + "-url", url.replace(":" + port + "/",
                         ":${resilience." + side + "-proxy.port}/"));
-                properties.remove("data-migration." + side + ".password");
-                properties.setProperty("data-migration." + side + ".credentials-provider", "harnessCredentials");
+                properties.remove("host-databases." + side + ".jdbc-url");
             }
             try (var writer = Files.newBufferedWriter(config)) { properties.store(writer, "synthetic local DEV contract"); }
             // Imported data has higher priority in Spring; explicit override selects DEV behavior.

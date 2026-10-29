@@ -1,13 +1,11 @@
 data-migration:
-  run-on-startup: false
   strategy:
-    batch-size: 200
-    commit-size: 1000
     max-concurrent-tables: 2
     retry-initial-backoff: 10ms
     retry-max-backoff: 20ms
   tables:
     - name: customer
+      batch-size: 1000
       target-table: CUSTOMER
       primary-key: [ID]
       worker-count: 1

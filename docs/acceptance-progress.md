@@ -1,8 +1,16 @@
 # 本地实施与验收记录
 
-本次本地交付完成。以下证据来自当前代码、测试报告、JAR 检查和最终 clean verify；云端联调边界见文末。
+以下早期记录为历史验收证据；连接配置和批量参数已进行破坏性改造，当前接入方式以 README 和 getting-started.md 为准。最新双版本验收记录位于本文顶部。
 
-## 已有验证
+## 当前改造验证（2026-10-29）
+
+宿主直接提供 DataSource，MigrationRunner 在不创建 Spring 容器的情况下执行；Spring 包装使用源/目标注解。每表只有 batch-size 行数参数，旧连接与启动配置不再接受，不承诺旧版未完成 job 的兼容。
+
+最终 Java 17 clean verify 已通过：182 项单元/组件测试，16 项集成测试中15项执行通过、1项真实环境入口默认跳过，行/分支85%门槛通过。日志 target-refactor-final17.log。启动前 BeforeStartupDemo 已在真实Java17运行；ECS宿主代码按release17编译，JAR检查确认不存在已删除建池/凭据类。Java21同一轮clean verify也已通过，测试数量与Java17一致，日志target-refactor-final21.log。最终UT行覆盖98.17%，分支覆盖85.83%，均高于85%。
+
+恢复测试仍覆盖父进程TCP代理、子进程宿主、四类精确业务提交边界、恢复后数据和审计校验；DEV契约由测试宿主注册外部DataSource，不执行DEV建表或清理。真实Oracle/PostgreSQL/IAM/ECS未联调。
+
+## 早期验证（历史）
 
 | 要求 | 证据 |
 | --- | --- |

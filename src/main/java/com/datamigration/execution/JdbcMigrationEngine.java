@@ -251,7 +251,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                 List<Checkpoint> pending = store.pending(control, window);
                 if (pending.isEmpty()) {
                     if (store.find(control, 0, false).planningComplete()) break;
-                    planWindow(plan, query, keys, source, control, store, lock, window, fingerprint, target);
+                    planWindow(plan, task, query, keys, source, control, store, lock, window, fingerprint, target);
                     pending = store.pending(control, window);
                     if (pending.isEmpty()) continue;
                 }
@@ -280,15 +280,15 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         }
     }
 
-    private void planWindow(MigrationPlan plan, String query, List<String> keys, Connection source, Connection control,
+    private void planWindow(MigrationPlan plan, TableTask task, String query, List<String> keys, Connection source, Connection control,
                             CheckpointStore store, TableLock lock, int window, String fingerprint, String target) throws SQLException {
         store.find(control, 0, true);
         lock.assertOwner(control);
         Checkpoint last = store.last(control);
         List<KeyCodec.Value> lower = last == null ? null : last.upper();
         long number = last == null ? 1 : last.batch() + 1;
-        int maxRows = Math.multiplyExact(window, plan.strategy().commitSize());
-        try (var statement = SqlSupport.range(query, keys, lower, null, true).prepare(source, plan.strategy().fetchSize())) {
+        int maxRows = Math.multiplyExact(window, task.batchSize());
+        try (var statement = SqlSupport.range(query, keys, lower, null, true).prepare(source, task.batchSize())) {
             statement.setMaxRows(maxRows);
             try (var result = statement.executeQuery()) {
                 long count = 0;
@@ -296,7 +296,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                 int batches = 0;
                 while (result.next()) {
                     upper = KeyCodec.read(result, keys.size()); count++;
-                    if (count == plan.strategy().commitSize()) {
+                    if (count == task.batchSize()) {
                         store.create(control, number++, target, fingerprint, lower, upper, count);
                         lower = upper; count = 0; batches++;
                     }
@@ -327,7 +327,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                     if (!task.keyed() && task.mode() == TableTask.Mode.CLEAR_AND_REIMPORT) clear(target, task);
                     JdbcRows.Counts counts;
                     try (Connection source = connections.openSourceConnection();
-                         var read = SqlSupport.range(query, keys, batch.lower(), batch.upper(), false).prepare(source, strategy.fetchSize());
+                         var read = SqlSupport.range(query, keys, batch.lower(), batch.upper(), false).prepare(source, task.batchSize());
                          var result = read.executeQuery();
                          var insert = target.prepareStatement(task.insertSql())) {
                         insert.setQueryTimeout(60);
@@ -404,7 +404,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         try {
             String material = endpointIdentity + "\n" + task.selectSql() + "\n" + task.insertSql() + "\n"
                     + task.targetTable() + "\n" + task.primaryKey() + "\n" + task.fields() + "\n" + task.mode()
-                    + "\n" + task.sequence() + "\n" + plan.strategy().commitSize() + "\n" + plan.strategy().skipLimit()
+                    + "\n" + task.sequence() + "\n" + task.batchSize() + "\n" + plan.strategy().skipLimit()
                     + "\n" + plan.strategy().maxLobSize();
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(material.getBytes(StandardCharsets.UTF_8)));
         } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }

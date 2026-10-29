@@ -62,7 +62,7 @@ class ExecutionIsolationTest {
             engine.execute(db.plan(db.task("A")));
             var old=db.task("A");
             var changed=new com.datamigration.model.TableTask(old.name(),"SELECT ID,NAME FROM A WHERE ID>5",
-                    old.insertSql(),old.fields(),old.targetTable(),old.primaryKey(),old.workerCount(),old.mode(),old.sequence());
+                    old.insertSql(),old.fields(),old.targetTable(),old.primaryKey(),old.workerCount(),old.mode(),old.sequence(),old.batchSize());
             assertThatThrownBy(() -> engine.execute(db.plan(changed))).isInstanceOf(MigrationException.class);
             assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE job_id='job' AND batch_no=0 AND state='SUCCEEDED'")).isEqualTo(1);
         }

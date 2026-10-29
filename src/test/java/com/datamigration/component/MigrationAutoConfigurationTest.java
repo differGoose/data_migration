@@ -1,259 +1,99 @@
 package com.datamigration.component;
-import com.datamigration.support.*;
-import com.datamigration.autoconfigure.*;
 
 import com.datamigration.api.*;
-import com.datamigration.execution.MigrationEngine;
+import com.datamigration.autoconfigure.MigrationAutoConfiguration;
 import com.datamigration.properties.MigrationConfiguration;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.springframework.boot.ApplicationRunner;
-import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.*;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.PlatformTransactionManager;
 import javax.sql.DataSource;
-import java.time.Instant;
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.mock;
 
 class MigrationAutoConfigurationTest {
-    private final ApplicationContextRunner base = new ApplicationContextRunner()
-        .withConfiguration(AutoConfigurations.of(MigrationAutoConfiguration.class));
-
-    private ApplicationContextRunner configured() {
-        return configuredWithoutPasswords().withPropertyValues("data-migration.source.password=", "data-migration.target.password=");
-    }
-
-    private ApplicationContextRunner configuredWithoutPasswords() {
-        return base.withPropertyValues(
-            "data-migration.job-id=test-job",
-            "data-migration.tables[0].target-table=CUSTOMER",
-            "data-migration.source.jdbc-url=jdbc:h2:mem:source",
-            "data-migration.source.username=sa",
-            "data-migration.source.driver-class-name=org.h2.Driver",
-            "data-migration.target.jdbc-url=jdbc:h2:mem:target",
-            "data-migration.target.username=sa",
-            "data-migration.target.driver-class-name=org.h2.Driver",
-            "data-migration.tables[0].name=customer",
-            "data-migration.tables[0].select-sql=SELECT ID AS CUSTOMER_ID FROM CUSTOMER",
-            "data-migration.tables[0].insert-sql=INSERT INTO CUSTOMER(ID) VALUES (?)",
-            "data-migration.tables[0].fields[0].source-column=CUSTOMER_ID",
-            "data-migration.tables[0].fields[0].target-jdbc-type=BIGINT");
-    }
-
-    @Test void namedProvidersAllowOmittedPasswordsAndRemainLazy() {
-        AtomicInteger calls = new AtomicInteger();
-        configuredWithoutPasswords().withPropertyValues(
-                "data-migration.source.credentials-provider=sourceAuth",
-                "data-migration.target.credentials-provider=targetAuth")
-            .withBean("sourceAuth", DatabaseCredentialsProvider.class, () -> (role, endpoint) -> {
-                assertThat(role).isEqualTo(DatabaseCredentialsProvider.EndpointRole.SOURCE);
-                calls.incrementAndGet(); return new DatabaseCredentials("sa", "");
-            })
-            .withBean("targetAuth", DatabaseCredentialsProvider.class, () -> (role, endpoint) -> {
-                assertThat(role).isEqualTo(DatabaseCredentialsProvider.EndpointRole.TARGET);
-                calls.incrementAndGet(); return new DatabaseCredentials("sa", "");
-            }).run(context -> {
-                assertThat(context).hasNotFailed().doesNotHaveBean(DataSource.class);
-                var pools = context.getBean(MigrationConnectionPools.class);
-                assertThat(calls).hasValue(0);
-                assertThat(context.getBean(MigrationConfiguration.class).get().source().password()).isNull();
-                try (var s = pools.openSourceConnection(); var t = pools.openTargetConnection()) {
-                    assertThat(s.isValid(1)).isTrue(); assertThat(t.isValid(1)).isTrue();
-                }
-                assertThat(calls.get()).isGreaterThanOrEqualTo(2);
-            });
-    }
-
-    @Test void missingPasswordWithoutProviderIsRejected() {
-        configuredWithoutPasswords().run(context -> assertThatThrownBy(() ->
-                context.getBean(MigrationConfiguration.class).get()).hasStackTraceContaining("password is required"));
-    }
-
-    @Test void missingAndWrongTypeProvidersNeverFallBack() {
-        for (String name : List.of("missingAuth", "wrongAuth")) {
-            configured().withPropertyValues("data-migration.source.credentials-provider=" + name)
-                .withBean("wrongAuth", String.class, () -> "not-a-provider")
-                .run(context -> assertThatThrownBy(() -> context.getBean(MigrationConnectionPools.class)
-                        .openSourceConnection()).hasMessageContaining(name).hasMessageContaining("SOURCE").hasNoCause());
-        }
-    }
-
-    @Test void serviceAlwaysAvailableWithoutConfigurationOrPoolCreation() {
-        base.run(context -> {
-            assertThat(context).hasNotFailed().hasSingleBean(MigrationService.class)
-                .doesNotHaveBean(ApplicationRunner.class);
-            assertThat(context.getBeanFactory().containsSingleton("migrationConnectionPools")).isFalse();
-            assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate())
-                .hasMessageContaining("Missing data-migration configuration");
+    final ApplicationContextRunner base = new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(MigrationAutoConfiguration.class));
+    static String[] properties() { return new String[]{
+        "data-migration.job-id=test-job", "data-migration.tables[0].name=a",
+        "data-migration.tables[0].target-table=A", "data-migration.tables[0].select-sql=SELECT ID FROM A",
+        "data-migration.tables[0].insert-sql=INSERT INTO A VALUES (?)", "data-migration.tables[0].primary-key=ID",
+        "data-migration.tables[0].fields[0].source-column=ID", "data-migration.tables[0].fields[0].target-jdbc-type=BIGINT"}; }
+    @Test void serviceIsLazyAndDoesNotStartMigrationOrCreateHostInfrastructure() {
+        base.run(c -> {
+            assertThat(c).hasSingleBean(MigrationService.class).doesNotHaveBean(org.springframework.boot.ApplicationRunner.class)
+                .doesNotHaveBean(DataSource.class);
+            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("Missing data-migration");
         });
     }
-
-    @Test void startupFlagRegistersRunnerAndMissingConfigurationFailsOnExecution() {
-        base.withPropertyValues("data-migration.run-on-startup=true").run(context -> {
-            assertThat(context).hasNotFailed().hasSingleBean(MigrationService.class)
-                .hasSingleBean(ApplicationRunner.class);
-            assertThatThrownBy(() -> context.getBean(ApplicationRunner.class)
-                .run(new DefaultApplicationArguments())).isInstanceOf(RuntimeException.class);
-        });
-    }
-
-    @Test void enabledConfigurationIsLazyAndMissingAuditFailsExplicitly() {
-        configured().run(context -> {
-            assertThat(context).hasNotFailed().doesNotHaveBean(DataSource.class)
-                .doesNotHaveBean(PlatformTransactionManager.class);
-            var pools = context.getBean(MigrationConnectionPools.class);
-            assertThat(pools.isInitialized()).isFalse();
-            assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate())
-                .isInstanceOf(MigrationException.class);
-            assertThat(pools.isInitialized()).isTrue();
-            assertThat(context.getBean(MigrationConfiguration.class).get().strategy().skipLimit()).isZero();
-        });
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {
-        "data-migration.strategy.batch-size=0",
-        "data-migration.strategy.commit-size=0",
-        "data-migration.strategy.fetch-size=-1",
-        "data-migration.strategy.skip-limit=-1",
-        "data-migration.strategy.transient-retry-count=-1",
-        "data-migration.strategy.max-concurrent-tables=0",
-        "data-migration.strategy.max-batch-bytes=0B",
-        "data-migration.strategy.max-lob-size=0B",
-        "data-migration.strategy.audit.enabled=false",
-        "data-migration.source.pool.idle-timeout=1s",
-        "data-migration.source.pool.max-lifetime=1s",
-        "data-migration.tables[0].worker-count=2",
-        "data-migration.tables[0].primary-key=ID,id",
-        "data-migration.tables[0].sequence.enabled=true",
-        "data-migration.strategy.retry-initial-backoff=0s",
-        "data-migration.strategy.retry-max-backoff=1ms",
-        "data-migration.source.jdbc-url=not-jdbc",
-        "data-migration.source.username=",
-        "data-migration.source.pool.minimum-idle=5",
-        "data-migration.target.pool.connection-timeout=1ms",
-        "data-migration.tables[0].fields[0].target-jdbc-type=INVALID",
-        "data-migration.tables[0].fields[0].source-column=",
-        "data-migration.tables[0].enabled=false",
-        "data-migration.strategy.audit.table-name=unsafe;sql",
-        "data-migration.strategy.batch-szie=100",
-        "data-migration.enabled=true"
-    })
-    void rejectsInvalidConfiguration(String property) {
-        configured().withPropertyValues(property).run(context -> {
-            assertThat(context).hasNotFailed().hasSingleBean(MigrationService.class);
-            assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate())
-                .isInstanceOf(org.springframework.boot.context.properties.bind.BindException.class);
-        });
-    }
-
-    @Test void rejectsMissingEndpointsAndFields() {
-        base.run(context -> assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate())
-            .hasMessageContaining("Missing data-migration configuration"));
-        configured().withPropertyValues("data-migration.tables[0].fields=")
-            .run(context -> assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate())
+    @ParameterizedTest @ValueSource(strings={
+        "data-migration.run-on-startup=true", "data-migration.source.jdbc-url=jdbc:h2:mem:x",
+        "data-migration.target.username=sa", "data-migration.strategy.fetch-size=1", "data-migration.strategy.commit-size=1",
+        "data-migration.strategy.batch-size=1", "data-migration.tables[0].batch-size=0", "data-migration.tables[0].worker-count=0",
+        "data-migration.strategy.skip-limit=-1", "data-migration.strategy.transient-retry-count=-1",
+        "data-migration.strategy.max-concurrent-tables=0", "data-migration.strategy.max-batch-bytes=0B",
+        "data-migration.strategy.max-lob-size=0B", "data-migration.strategy.audit.enabled=false",
+        "data-migration.tables[0].primary-key=ID,id", "data-migration.tables[0].sequence.enabled=true",
+        "data-migration.strategy.retry-initial-backoff=0s", "data-migration.strategy.retry-max-backoff=1ms",
+        "data-migration.tables[0].fields[0].target-jdbc-type=INVALID", "data-migration.tables[0].enabled=false",
+        "data-migration.strategy.audit.table-name=unsafe;sql", "data-migration.tables[0].fields="})
+    void invalidAndRemovedPropertiesAreRejected(String property) {
+        base.withPropertyValues(properties()).withPropertyValues(property).run(c ->
+            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate())
                 .isInstanceOf(org.springframework.boot.context.properties.bind.BindException.class));
     }
-
-    @Test void rejectsDuplicateTaskNames() {
-        configured().withPropertyValues(
-            "data-migration.tables[1].name=CUSTOMER",
-            "data-migration.tables[1].target-table=OTHER_CUSTOMER",
-            "data-migration.tables[1].select-sql=SELECT ID FROM CUSTOMER",
-            "data-migration.tables[1].insert-sql=INSERT INTO CUSTOMER(ID) VALUES (?)",
-            "data-migration.tables[1].fields[0].source-column=ID",
-            "data-migration.tables[1].fields[0].target-jdbc-type=BIGINT")
-            .run(context -> {
-                assertThat(context).hasNotFailed();
-                assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate())
-                    .hasStackTraceContaining("table names must be unique");
-            });
+    @Configuration(proxyBeanMethods=false) static class Host {
+        @Bean @MigrationSource(capacity=4) DataSource s() { return new DriverManagerDataSource("jdbc:h2:mem:s", "sa", ""); }
+        @Bean @MigrationTarget(capacity=4) DataSource t() { return new DriverManagerDataSource("jdbc:h2:mem:t", "sa", ""); }
+        @Bean DataSourceTransactionManager hostTransactions(DataSource s) { return new DataSourceTransactionManager(s); }
     }
-
-    @Test void preservesHostDataSourceAndTransactionManager() {
-        DataSource host = mock(DataSource.class);
-        PlatformTransactionManager transactions = new DataSourceTransactionManager(host);
-        configured().withBean("hostDataSource", DataSource.class, () -> host)
-            .withBean("hostTransactions", PlatformTransactionManager.class, () -> transactions)
-            .run(context -> {
-                assertThat(context).hasNotFailed().hasSingleBean(DataSource.class)
-                    .hasSingleBean(PlatformTransactionManager.class);
-                assertThat(context.getBean(DataSource.class)).isSameAs(host);
-                assertThat(context.getBean(PlatformTransactionManager.class)).isSameAs(transactions);
-                assertThat(context.getBean(MigrationConnectionPools.class).isInitialized()).isFalse();
-            });
+    @Configuration(proxyBeanMethods=false) static class Duplicate {
+        @Bean @MigrationSource(capacity=4) DataSource another() { return new DriverManagerDataSource(); }
     }
-
-    @Test void customEngineReceivesPlan() {
-        AtomicInteger calls = new AtomicInteger();
-        MigrationEngine engine = plan -> {
-            calls.incrementAndGet();
-            assertThat(plan.tables()).hasSize(1);
-            assertThat(plan.tables().get(0).fields().get(0).sourceColumn()).isEqualTo("CUSTOMER_ID");
-            return result();
-        };
-        configured().withBean(MigrationEngine.class, () -> engine).run(context -> {
-            assertThat(calls).hasValue(0);
-            assertThat(context.getBean(MigrationService.class).migrate()).isNotNull();
-            assertThat(calls).hasValue(1);
+    @Configuration(proxyBeanMethods=false) static class InvalidCapacity {
+        @Bean @MigrationSource(capacity=0) DataSource invalid() { return new DriverManagerDataSource(); }
+    }
+    @MigrationSource(capacity=4)
+    static class SourceType extends DriverManagerDataSource {
+        SourceType() { super("jdbc:h2:mem:type_source", "sa", ""); }
+    }
+    @Configuration(proxyBeanMethods=false) static class TypeHost {
+        @Bean SourceType sourceByType() { return new SourceType(); }
+        @Bean @MigrationTarget(capacity=4) DataSource targetByMethod() {
+            return new DriverManagerDataSource("jdbc:h2:mem:type_target", "sa", "");
+        }
+        @Bean DataSource unrelatedBusinessDataSource() { return new DriverManagerDataSource(); }
+    }
+    @Test void implementationTypeAnnotationsSelectOnlyMigrationSources() {
+        base.withPropertyValues(properties()).withUserConfiguration(TypeHost.class).run(c -> {
+            assertThat(c.getBeansOfType(DataSource.class)).hasSize(3);
+            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).isInstanceOf(MigrationException.class);
         });
     }
-
-    @Test void customServiceOverridesDefaultAndStartupRunsSynchronously() {
-        AtomicInteger calls = new AtomicInteger();
-        MigrationService service = () -> { calls.incrementAndGet(); return result(); };
-        configured().withPropertyValues("data-migration.run-on-startup=true")
-            .withBean(MigrationService.class, () -> service).run(context -> {
-                assertThat(context).hasSingleBean(MigrationService.class).hasSingleBean(ApplicationRunner.class);
-                assertThat(context.getBean(MigrationService.class)).isSameAs(service);
-                context.getBean(ApplicationRunner.class).run(new DefaultApplicationArguments());
-                assertThat(calls).hasValue(1);
-            });
+    @Test void missingDuplicateAndInvalidRoleDeclarationsFail() {
+        base.withPropertyValues(properties()).run(c -> assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("MigrationSource"));
+        base.withPropertyValues(properties()).withUserConfiguration(Host.class, Duplicate.class).run(c ->
+            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("exactly one"));
+        base.withPropertyValues(properties()).withUserConfiguration(InvalidCapacity.class).run(c ->
+            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("positive"));
     }
-
-    @Test void startupFailurePropagatesWithoutConnections() {
-        configured().withPropertyValues("data-migration.run-on-startup=true").run(context -> {
-            assertThatThrownBy(() -> context.getBean(ApplicationRunner.class)
-                .run(new DefaultApplicationArguments()))
-                .isInstanceOf(MigrationException.class);
-            assertThat(context.getBean(MigrationConnectionPools.class).isInitialized()).isTrue();
+    @Test void hostBeansArePreservedAndAnnotatedConnectionsUsed() {
+        base.withPropertyValues(properties()).withUserConfiguration(Host.class).run(c -> {
+            assertThat(c.getBeansOfType(DataSource.class)).hasSize(2);
+            assertThat(c).hasSingleBean(DataSourceTransactionManager.class);
+            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).isInstanceOf(MigrationException.class);
+            var properties=c.getBean(MigrationConfiguration.class).get();
+            assertThat(properties.tables().get(0).batchSize()).isEqualTo(1000);
+            assertThat(properties.toString()).doesNotContain("SELECT");
+            assertThat(properties.tables().get(0).toString()).doesNotContain("SELECT");
         });
     }
-
-    @Test void poolsAreSeparateAndClosedWithContext() {
-        MigrationConnectionPools[] holder = new MigrationConnectionPools[1];
-        configured().run(context -> {
-            var pools = context.getBean(MigrationConnectionPools.class);
-            holder[0] = pools;
-            try (var source = pools.openSourceConnection(); var target = pools.openTargetConnection()) {
-                assertThat(source.getMetaData().getURL()).isEqualTo("jdbc:h2:mem:source");
-                assertThat(target.getMetaData().getURL()).isEqualTo("jdbc:h2:mem:target");
-                assertThat(target.getAutoCommit()).isFalse();
-                assertThat(pools.isInitialized()).isTrue();
-            }
-        });
-        assertThatThrownBy(() -> holder[0].openSourceConnection()).hasMessageContaining("closed");
-        assertThatThrownBy(() -> holder[0].openTargetConnection()).hasMessageContaining("closed");
-        holder[0].close(); // Idempotent.
-    }
-
-    @Test void diagnosticsDoNotPrintCredentialsOrSql() {
-        configured().run(context -> {
-            var p = context.getBean(MigrationConfiguration.class).get();
-            assertThat(p.toString()).isEqualTo("MigrationProperties[redacted]");
-            assertThat(p.source().toString()).isEqualTo("Endpoint[redacted]");
-            assertThat(p.tables().get(0).toString()).doesNotContain("SELECT", "INSERT");
-        });
-    }
-
-    private MigrationResult result() {
-        return new MigrationResult(UUID.randomUUID(), Instant.now(), Instant.now(), List.of());
+    @Test void customServiceAndEngineCanOverrideDefaults() {
+        MigrationService service=() -> new MigrationResult(java.util.UUID.randomUUID(),java.time.Instant.now(),java.time.Instant.now(),java.util.List.of());
+        base.withBean(MigrationService.class, () -> service).run(c -> assertThat(c.getBean(MigrationService.class)).isSameAs(service));
+        base.withPropertyValues(properties()).withBean(com.datamigration.execution.MigrationEngine.class, () -> plan -> service.migrate())
+            .run(c -> assertThat(c.getBean(MigrationService.class).migrate()).isNotNull());
     }
 }

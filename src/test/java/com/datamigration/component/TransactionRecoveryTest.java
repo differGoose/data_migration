@@ -49,7 +49,7 @@ class TransactionRecoveryTest {
             var original=db.task("A");
             var task=new TableTask(original.name(),original.selectSql(),original.insertSql(),original.fields(),
                     original.targetTable(),original.primaryKey(),2,TableTask.Mode.CLEAR_AND_REIMPORT,
-                    new SequenceSpec(true,"A_SEQ","ID"));
+                    new SequenceSpec(true,"A_SEQ","ID"), 100);
             try (var engine=db.engine(traced)) { engine.execute(db.plan(task)); }
             assertThat(statements).isNotEmpty().allMatch(sql -> sql.startsWith("SELECT "));
             assertThat(statements).noneMatch(sql -> sql.contains("NEXTVAL") || sql.contains("NEXT VALUE"));
@@ -122,7 +122,7 @@ class TransactionRecoveryTest {
             db.seed("A", 12);
             var original = db.task("A");
             var task = new TableTask(original.name(), original.selectSql(), original.insertSql(), original.fields(),
-                    original.targetTable(), original.primaryKey(), 1, original.mode(), new SequenceSpec(true, "A_SEQ", "ID"));
+                    original.targetTable(), original.primaryKey(), 1, original.mode(), new SequenceSpec(true, "A_SEQ", "ID"), 100);
             var plan = db.plan(task);
             var failure = catchThrowableOfType(() -> engine.execute(plan), MigrationException.class);
             assertThat(failure.result().tables().get(0).status()).isEqualTo(TableResult.Status.FINALIZATION_FAILED);

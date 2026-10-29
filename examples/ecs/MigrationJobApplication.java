@@ -1,17 +1,21 @@
-// Copy into the host application's source tree; this is not a second Maven module.
+// Copy into a HOST project with its own Hikari + JDBC dependencies.
 package example.migrationjob;
-
-import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.builder.SpringApplicationBuilder;
-
-@SpringBootApplication
-public class MigrationJobApplication {
+import com.datamigration.api.MigrationRunner;
+import com.zaxxer.hikari.HikariDataSource;
+public final class MigrationJobApplication {
     public static void main(String[] args) {
-        // Configure DATA_MIGRATION_RUN_ON_STARTUP=true. Startup failures remain uncaught.
-        try (var context = new SpringApplicationBuilder(MigrationJobApplication.class)
-                .web(WebApplicationType.NONE).run(args)) {
-            // ApplicationRunner has completed synchronously before run() returns.
+        try (var source = pool("SOURCE"); var target = pool("TARGET");
+             var migration = MigrationRunner.builder().source(source, 4).target(target, 4)
+                 .configLocations("file:/run/config/migration.yml").arguments(args).build()) {
+            migration.migrate(); // Exceptions propagate: the process exits unsuccessfully.
         }
+    }
+    private static HikariDataSource pool(String side) {
+        var ds = new HikariDataSource();
+        ds.setJdbcUrl(System.getenv(side + "_JDBC_URL"));
+        ds.setUsername(System.getenv(side + "_USERNAME"));
+        ds.setPassword(System.getenv(side + "_PASSWORD"));
+        ds.setMaximumPoolSize(4); ds.setMinimumIdle(0); ds.setConnectionTimeout(10000);
+        return ds;
     }
 }

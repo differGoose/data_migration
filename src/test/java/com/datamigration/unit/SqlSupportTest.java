@@ -12,7 +12,7 @@ import static org.mockito.Mockito.*;
 class SqlSupportTest {
     private TableTask task(String select, String insert) {
         return new TableTask("a",select,insert,List.of(new FieldMapping("ID",JDBCType.BIGINT)),
-                "DEST",List.of("ID"),1,TableTask.Mode.APPEND_RESUME,new SequenceSpec(false,null,null));
+                "DEST",List.of("ID"),1,TableTask.Mode.APPEND_RESUME,new SequenceSpec(false,null,null), 100);
     }
     @ParameterizedTest
     @ValueSource(strings={"DELETE FROM SRC","SELECT ID FROM SRC; DELETE FROM SRC","SELECT ID INTO NEW_TABLE FROM SRC",

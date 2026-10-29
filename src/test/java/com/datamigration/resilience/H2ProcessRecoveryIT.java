@@ -1,7 +1,7 @@
 package com.datamigration.resilience;
 
 import com.datamigration.api.MigrationService;
-import com.datamigration.autoconfigure.MigrationConnectionPools;
+import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.JdbcValueConverter;
 import com.datamigration.execution.JdbcMigrationEngine;
 import com.datamigration.jdbc.ConnectionAccess;
@@ -47,12 +47,12 @@ class H2ProcessRecoveryIT {
         Process process=new ProcessBuilder(java,"-cp",classpath,H2RecoveryWorker.class.getName(),mode,
                 "--spring.config.location=classpath:recovery.yml","--spring.main.web-application-type=none",
                 "--spring.main.banner-mode=off","--data-migration.job-id=e2e",
-                "--data-migration.source.jdbc-url="+databases.sourceUrl(),
-                "--data-migration.source.username=sa","--data-migration.source.password=",
-                "--data-migration.source.driver-class-name=org.h2.Driver",
-                "--data-migration.target.jdbc-url="+databases.targetUrl(),
-                "--data-migration.target.username=sa","--data-migration.target.password=",
-                "--data-migration.target.driver-class-name=org.h2.Driver")
+                "--host-databases.source.jdbc-url="+databases.sourceUrl(),
+                "--host-databases.source.username=sa","--host-databases.source.password=",
+                "--host-databases.source.driver-class-name=org.h2.Driver",
+                "--host-databases.target.jdbc-url="+databases.targetUrl(),
+                "--host-databases.target.username=sa","--host-databases.target.password=",
+                "--host-databases.target.driver-class-name=org.h2.Driver")
                 .redirectErrorStream(true).redirectOutput(output.toFile()).start();
         try {
             assertThat(process.waitFor(45,TimeUnit.SECONDS)).withFailMessage("Child process timed out: "+output).isTrue();

@@ -1,7 +1,7 @@
 package com.datamigration.e2e;
 
 import com.datamigration.api.MigrationService;
-import com.datamigration.autoconfigure.MigrationConnectionPools;
+import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.support.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -23,8 +23,8 @@ class H2MigrationIT {
             }
             MigrationAssertions.assertEquivalent(databases);
             try (var context = new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties())
-                    .run("--spring.config.location=classpath:e2e.yml", "--data-migration.run-on-startup=true")) {
-                assertThat(context.getBean(MigrationConnectionPools.class)).isNotNull();
+                    .run("--spring.config.location=classpath:e2e.yml")) {
+                assertThat(context.getBean(DataSourceConnections.class)).isNotNull();
             }
             MigrationAssertions.assertEquivalent(databases);
         }

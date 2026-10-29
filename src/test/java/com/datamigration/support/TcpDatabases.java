@@ -53,16 +53,16 @@ public final class TcpDatabases implements AutoCloseable {
     public Map<String, Object> properties() {
         return Map.ofEntries(
                 Map.entry("data-migration.job-id", "e2e"),
-                Map.entry("data-migration.source.jdbc-url", sourceUrl()),
-                Map.entry("data-migration.source.username", "sa"),
-                Map.entry("data-migration.source.password", ""),
-                Map.entry("data-migration.source.driver-class-name", "org.h2.Driver"),
-                Map.entry("data-migration.source.pool.maximum-pool-size", "6"),
-                Map.entry("data-migration.target.jdbc-url", targetUrl()),
-                Map.entry("data-migration.target.username", "sa"),
-                Map.entry("data-migration.target.password", ""),
-                Map.entry("data-migration.target.driver-class-name", "org.h2.Driver"),
-                Map.entry("data-migration.target.pool.maximum-pool-size", "6"),
+                Map.entry("host-databases.source.jdbc-url", sourceUrl()),
+                Map.entry("host-databases.source.username", "sa"),
+                Map.entry("host-databases.source.password", ""),
+                Map.entry("host-databases.source.driver-class-name", "org.h2.Driver"),
+                Map.entry("host-databases.source.pool.maximum-pool-size", "6"),
+                Map.entry("host-databases.target.jdbc-url", targetUrl()),
+                Map.entry("host-databases.target.username", "sa"),
+                Map.entry("host-databases.target.password", ""),
+                Map.entry("host-databases.target.driver-class-name", "org.h2.Driver"),
+                Map.entry("host-databases.target.pool.maximum-pool-size", "6"),
                 Map.entry("spring.main.banner-mode", "off"),
                 Map.entry("spring.main.web-application-type", "none"));
     }

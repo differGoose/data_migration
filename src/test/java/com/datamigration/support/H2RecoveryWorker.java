@@ -1,7 +1,7 @@
 package com.datamigration.support;
 
 import com.datamigration.api.MigrationService;
-import com.datamigration.autoconfigure.MigrationConnectionPools;
+import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.JdbcValueConverter;
 import com.datamigration.execution.JdbcMigrationEngine;
 import com.datamigration.jdbc.ConnectionAccess;
@@ -26,7 +26,7 @@ public final class H2RecoveryWorker {
             try (var context=new SpringApplicationBuilder(ResilienceHost.class)
                     .initializers(application -> application.getBeanFactory().registerSingleton("processService",
                             (MigrationService) () -> {
-                                var pools=application.getBean(MigrationConnectionPools.class);
+                                var pools=application.getBean(DataSourceConnections.class);
                                 var config=application.getBean(MigrationConfiguration.class).get();
                                 ConnectionAccess access=new ConnectionAccess() {
                                     public Connection openSourceConnection() throws SQLException { return pools.openSourceConnection(); }
@@ -59,7 +59,7 @@ public final class H2RecoveryWorker {
                                     }
                                 };
                                 try (var engine=new JdbcMigrationEngine(access,4,4,
-                                        config.source().jdbcUrl()+"|"+config.target().jdbcUrl(),new JdbcValueConverter())) {
+                                        HostDataSources.identity(pools),new JdbcValueConverter())) {
                                     return engine.execute(config.toPlan());
                                 }
                             }))

@@ -17,7 +17,7 @@ class JdbcMigrationEngineTest {
             db.target("ALTER TABLE A ADD CONSTRAINT bad_id CHECK(ID<>1)");
             var original=db.task("A");
             var task=new TableTask(original.name(),original.selectSql(),original.insertSql(),original.fields(),
-                    original.targetTable(),original.primaryKey(),1,original.mode(),original.sequence());
+                    original.targetTable(),original.primaryKey(),1,original.mode(),original.sequence(), 100);
             var plan=db.plan(task,db.task("B"));
             assertThatThrownBy(() -> engine.execute(plan)).isInstanceOf(MigrationException.class);
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
@@ -76,7 +76,7 @@ class JdbcMigrationEngineTest {
             db.target("ALTER TABLE A ADD CONSTRAINT bad_id CHECK (ID<>210)");
             var normal = db.task("A");
             var task = new TableTask(normal.name(), normal.selectSql(), normal.insertSql(), normal.fields(),
-                    "A", List.of(), 1, TableTask.Mode.CLEAR_AND_REIMPORT, normal.sequence());
+                    "A", List.of(), 1, TableTask.Mode.CLEAR_AND_REIMPORT, normal.sequence(), 100);
             var plan = db.plan(task);
             assertThatThrownBy(() -> engine.execute(plan)).isInstanceOf(MigrationException.class);
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(1);
@@ -101,7 +101,7 @@ class JdbcMigrationEngineTest {
             var task = new TableTask("A", "SELECT * FROM A ORDER BY K1,K2", "INSERT INTO A VALUES (?,?,?)",
                     List.of(new FieldMapping("K1", JDBCType.BIGINT), new FieldMapping("K2", JDBCType.VARCHAR),
                             new FieldMapping("DATA", JDBCType.VARBINARY)), "A", List.of("K1","K2"), 2,
-                    TableTask.Mode.APPEND_RESUME, new SequenceSpec(false,null,null));
+                    TableTask.Mode.APPEND_RESUME, new SequenceSpec(false,null,null), 100);
             engine.execute(db.plan(task));
             try (var connection = db.openTargetConnection(); var result = connection.createStatement().executeQuery("SELECT DATA FROM A")) {
                 int count = 0;
@@ -131,7 +131,7 @@ class JdbcMigrationEngineTest {
             db.target("CREATE SEQUENCE A_SEQ START WITH 1");
             var normal = db.task("A");
             var task = new TableTask(normal.name(), normal.selectSql(), normal.insertSql(), normal.fields(),
-                    "A", normal.primaryKey(), 1, TableTask.Mode.CLEAR_AND_REIMPORT, new SequenceSpec(true,"A_SEQ","ID"));
+                    "A", normal.primaryKey(), 1, TableTask.Mode.CLEAR_AND_REIMPORT, new SequenceSpec(true,"A_SEQ","ID"), 100);
             var plan = db.plan(task);
             engine.execute(plan);
             assertThat(db.scalar("SELECT NEXT VALUE FOR A_SEQ")).isEqualTo(16);
@@ -149,7 +149,7 @@ class JdbcMigrationEngineTest {
             engine.execute(db.plan(db.task("A")));
             var original = db.task("A");
             var changed = new TableTask(original.name(), "SELECT ID,NAME FROM A WHERE ID>1", original.insertSql(),
-                    original.fields(), original.targetTable(), original.primaryKey(), 1, original.mode(), original.sequence());
+                    original.fields(), original.targetTable(), original.primaryKey(), 1, original.mode(), original.sequence(), 100);
             assertThatThrownBy(() -> engine.execute(db.plan(changed))).isInstanceOf(MigrationException.class);
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(10);
         }

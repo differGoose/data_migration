@@ -59,11 +59,11 @@ public final class DatabaseFixture implements ConnectionAccess, AutoCloseable {
         return new TableTask(name, "SELECT ID, NAME FROM " + name + " ORDER BY ID",
                 "INSERT INTO " + name + "(ID,NAME) VALUES (?,?)",
                 List.of(new FieldMapping("ID", JDBCType.BIGINT), new FieldMapping("NAME", JDBCType.VARCHAR)),
-                name, List.of("ID"), 2, TableTask.Mode.APPEND_RESUME, new SequenceSpec(false, null, null));
+                name, List.of("ID"), 2, TableTask.Mode.APPEND_RESUME, new SequenceSpec(false, null, null), 100);
     }
     public MigrationPlan plan(TableTask... tasks) { return plan("job", 0, tasks); }
     public MigrationPlan plan(String job, long skip, TableTask... tasks) {
-        return new MigrationPlan(job, new MigrationStrategy(50, 20, 100, skip, 2,
+        return new MigrationPlan(job, new MigrationStrategy( skip, 2,
                 Duration.ofMillis(1), Duration.ofMillis(2), 2, true, "migration_audit", 16*1024, 8*1024*1024), List.of(tasks));
     }
     public JdbcMigrationEngine engine() { return engine(this); }

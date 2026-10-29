@@ -54,7 +54,7 @@ class H2ScenariosIT {
     private ConfigurableApplicationContext context(TcpDatabases databases,String job) {
         return new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties()).run(
                 "--spring.config.location=classpath:scenarios.yml", "--data-migration.job-id="+job,
-                "--data-migration.source.pool.maximum-pool-size=10", "--data-migration.target.pool.maximum-pool-size=10");
+                "--host-databases.source.pool.maximum-pool-size=10", "--host-databases.target.pool.maximum-pool-size=10");
     }
     private long scalar(TcpDatabases databases,String sql) throws Exception {
         try (var connection=DatabaseFixture.connection(databases.targetUrl()); var statement=connection.createStatement();

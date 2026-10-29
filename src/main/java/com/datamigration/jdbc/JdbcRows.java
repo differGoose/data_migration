@@ -36,7 +36,7 @@ public final class JdbcRows {
                     }
                     bind(target, task, row);
                     target.addBatch(); pending++; bytes += row.bytes; written++;
-                    if (pending >= strategy.batchSize() || bytes >= strategy.maxBatchBytes()) {
+                    if (pending >= task.batchSize() || bytes >= strategy.maxBatchBytes()) {
                         executeBatch(target, pending); pending = 0; bytes = 0;
                     }
                 }

@@ -13,7 +13,7 @@ class RowDigestTest {
         return new TableTask("t", "SELECT ID,N,T,B FROM T ORDER BY ID", "INSERT INTO T VALUES (?,?,?,?)",
                 List.of(new FieldMapping("ID", JDBCType.BIGINT), new FieldMapping("N", JDBCType.DECIMAL),
                         new FieldMapping("T", JDBCType.VARCHAR), new FieldMapping("B", JDBCType.VARBINARY)),
-                "T", List.of("ID"), 1, TableTask.Mode.APPEND_RESUME, new SequenceSpec(false, null, null));
+                "T", List.of("ID"), 1, TableTask.Mode.APPEND_RESUME, new SequenceSpec(false, null, null), 100);
     }
     @Test void checksumNormalizesDecimalsAndLobsButDetectsNullsChangesAndDuplicates() throws Exception {
         try (var connection = DriverManager.getConnection("jdbc:h2:mem:" + UUID.randomUUID())) {

@@ -8,22 +8,22 @@
 | --- | --- |
 | 宿主 | 引入组件并调用 migrate() 的 Spring Boot 应用 |
 | 表任务 | tables 列表中一个启用的配置项 |
-| 事务块 | 有键表中最多 commit-size 条源记录的范围，成功时数据和检查点一起提交 |
+| 事务块 | 有键表中最多 tables[].batch-size 条源记录的范围，成功时数据和检查点一起提交 |
 | 检查点 | 目标审计库中持久化的边界与状态，进程退出后仍能读取 |
 | 协调连接 | 负责规划范围、汇总和收尾的连接，与 worker 连接分开 |
 | guard | 独立持有目标表执行锁的连接，防止本组件的另一个执行者同时接管 |
 | 执行令牌 | 接管时更换的随机值，旧执行者继续写入前必须核实自己仍有所有权 |
 | 指纹 | 对关键迁移配置计算的摘要，避免用不同规则误续跑旧数据 |
 
-例如 2500 行、commit-size=1000 的单 worker 有键任务，通常规划三个事务块，分别处理 1000、1000、500 行。如果前两块成功、第三块失败，新宿主从第三块继续，而不是从最大已见 ID 猜测是否完成。实际实现采用有界窗口，避免先把全表键装进内存。
+例如 2500 行、tables[].batch-size=1000 的单 worker 有键任务，通常规划三个事务块，分别处理 1000、1000、500 行。如果前两块成功、第三块失败，新宿主从第三块继续，而不是从最大已见 ID 猜测是否完成。实际实现采用有界窗口，避免先把全表键装进内存。
 
 本篇解释实现原因。如何接入和处理失败请分别看 [接入步骤](getting-started.md)及 [运维指南](operations.md)。
 
 ## 调用与资源
 
-AutoConfiguration.imports 注册自动配置。MigrationService 始终可注入，默认在第一次调用时绑定并校验 YAML，缓存成功配置。run-on-startup 仅控制 ApplicationRunner 是否同步调用同一入口。没有 REST 接口、业务 DataSource Bean 或宿主事务管理器依赖。
+MigrationRunner 接收宿主提供的两个 DataSource，使用 ConfigData 加载配置但不创建 Spring 容器。Spring 包装通过 AutoConfiguration.imports 自动发现，按源/目标标记选择宿主 DataSource，第一次调用绑定并缓存规则，不注册 ApplicationRunner。没有 REST 接口，不参与宿主业务事务。
 
-MigrationConnectionPools 延迟创建两个独立 Hikari 池，连接使用 READ_COMMITTED、autoCommit=false。Spring 关闭时销毁引擎和连接池；每次执行独立管理游标、语句、借用连接。单个引擎拒绝重叠 execute 调用。
+DataSourceConnections 只借用连接，设置 READ_COMMITTED、autoCommit=false，结束未完成事务后恢复宿主事务属性并归还；回滚失败时不会启用 autoCommit 以免意外提交。Runner/Spring 关闭只关闭引擎，数据源始终由宿主管理。身份摘要来自元数据 URL、用户名、catalog/schema，去除认证/连接选项，不依赖对象地址。单个 Runner 拒绝重叠调用。
 
 编译和最低运行版本为 Java 17。ExecutorScope 在离开作用域时 shutdown 并等待所有任务结束；等待被中断时 shutdownNow，继续等待资源清理完成，最后恢复调用线程的中断标志。该实现替代新版 JDK 的 ExecutorService.close，保持事务回滚和 Spring 关闭顺序。
 
@@ -54,11 +54,11 @@ YAML 是受信任管理员配置。JSqlParser 验证单个 SELECT 和目标 INSE
 
 ## 有键表的检查点
 
-协调线程按键的字典序规划 `(lower, upper]` 范围，联合键生成逐项比较谓词并使用 PreparedStatement 绑定。规划窗口最多 worker-count × 2 个事务块，每块最多 commit-size 条源记录；规划持久化后才能执行。不会把全表键或数据加载到内存。
+协调线程按键的字典序规划 `(lower, upper]` 范围，联合键生成逐项比较谓词并使用 PreparedStatement 绑定。规划窗口最多 worker-count × 2 个事务块，每块最多 tables[].batch-size 条源记录；规划持久化后才能执行。不会把全表键或数据加载到内存。
 
 每个 worker 独立使用源、目标连接，在目标事务中先锁定自己的批次记录，核实执行者令牌，流式读取并写入该范围，再锁定表汇总行累计计数、检查 skip-limit，最终将成功检查点和数据一起提交。不同批次即使乱序完成也不会丢失缺口。
 
-重启保持同一 job-id 和任务名，读取未成功的已规划批次，之后继续规划。指纹包括源/目标身份、SQL、字段、主键、模式、序列配置、commit-size、skip-limit、max-lob-size；性能参数如 worker-count 可以调整。成功任务返回已有结果。runId 是本次 API 调用标识，持久化恢复身份使用 job-id。
+重启保持同一 job-id 和任务名，读取未成功的已规划批次，之后继续规划。指纹包括源/目标身份、SQL、字段、主键、模式、序列配置、tables[].batch-size、skip-limit、max-lob-size；性能参数如 worker-count 可以调整。成功任务返回已有结果。runId 是本次 API 调用标识，持久化恢复身份使用 job-id。
 
 ## 无键表与重导
 
