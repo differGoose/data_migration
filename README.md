@@ -14,11 +14,12 @@
 | TLS 和 ECS 接入 | [云端指南](docs/cloud-deployment.md) |
 | 把真实DataSource直接交给E2E，或通过配置main/Maven执行 | [真实数据库E2E](docs/real-database-e2e.md) |
 | 模拟断网和宿主崩溃 | [恢复测试](docs/resilience-testing.md) |
+| 手动断开/恢复source或target，再调用原job续跑 | [模拟宿主手动代理测试](docs/manual-host-migration.md) |
 | 实现原理与测试位置 | [架构](docs/architecture.md)、[测试索引](docs/test-index.md) |
 
 ## 启动前执行
 
-先在本仓库 `mvn clean install`，宿主引入 `com.datamigration:data_migration:0.1.0-SNAPSHOT`，自行添加连接池和数据库驱动。组件没有内置数据库连接配置或连接池，不创建 Spring 容器。
+先在本仓库 `mvn clean install`，宿主引入 `com.datamigration:data_migration:0.1.0-SNAPSHOT`，自行添加连接池；Oracle和PostgreSQL JDBC驱动已作为运行时依赖提供。组件没有内置数据库连接配置或连接池，不创建 Spring 容器。
 
 ```java
 public static void main(String[] args) {

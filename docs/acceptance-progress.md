@@ -2,6 +2,14 @@
 
 以下早期记录为历史验收证据；连接配置和批量参数已进行破坏性改造，当前接入方式以 README 和 getting-started.md 为准。当前仅支持与验证 JDK 17；本文下方所有双版本、执行锁和指纹记录均为历史，不代表当前能力。
 
+## 模拟宿主手动代理与默认驱动（2026-10-30）
+
+新增HostMigrationE2EIT，使用正式classpath:application.yml直接调用Runner，不要求e2e字段。可选手动模式以两个TCP代理分别控制源、目标；本机控制页显式执行、切断、恢复及结束。断网失败后由宿主在下一次显式执行前淘汰旧池连接，不修改引擎重试策略。源/目标实际断连、同Runner恢复及重复调用由合成H2的ManualHostRecoveryIT验证；真实入口不创建H2或数据库对象。
+
+Oracle ojdbc11与PostgreSQL驱动改为默认runtime依赖，不再需要resilience-dev profile；JDK17下通过DriverManager自动发现两种驱动，未尝试真实连接。
+
+JDK17的完整 `mvn -B -ntp clean verify` 通过：186项单元/组件测试；22项集成测试中19项执行通过、3项真实入口默认跳过；UT行覆盖98.67%，分支86.07%，保持各85%门槛。日志target-manual-final17.log。控制访问、运行互斥、取消清理和显式恢复已验证；真实Oracle/PostgreSQL连接参数留给使用者填写，未宣称真实数据库联调。操作见 [手动代理迁移](manual-host-migration.md)。
+
 ## 单进程协调与审计简化（当前，2026-10-29）
 
 默认引擎使用JVM共享单许可，跨Runner、Spring Context及目标表的重叠调用立即失败。取消后等待工作线程及事务清理结束才释放许可，关闭空闲Runner不能释放其他执行者的许可。数据库执行锁、guard、执行令牌、fingerprint和端点身份计算均已删除；保留批次/汇总事务行锁、提交结果核实、有限重试和同job恢复。

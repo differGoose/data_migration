@@ -56,3 +56,9 @@
 - `e2e/ExternalFaultE2EIT`：调用方准备H2服务器，通过外部配置类验证四种故障、重复调用及无键重导恢复。
 
 - [component/GlobalMigrationExecutionTest.java](../src/test/java/com/datamigration/component/GlobalMigrationExecutionTest.java)：跨 Spring Context 全局互斥、取消后清理等待、关闭空闲 Runner、最低连接预算。
+
+- [e2e/HostMigrationE2EIT.java](../src/test/java/com/datamigration/e2e/HostMigrationE2EIT.java)：模拟宿主创建真实数据库DataSource并直接调用MigrationRunner；使用正式application.yml，无需e2e配置或校验SQL，连接信息留空，显式启用，默认跳过。
+
+- [support/ManualMigrationConsole.java](../src/test/java/com/datamigration/support/ManualMigrationConsole.java)：本机控制页，独立切断/恢复两端代理、显式执行与结束测试。
+- [component/ManualMigrationConsoleTest.java](../src/test/java/com/datamigration/component/ManualMigrationConsoleTest.java)：控制访问、运行互斥、手动恢复、超时及取消清理。
+- [e2e/ManualHostRecoveryIT.java](../src/test/java/com/datamigration/e2e/ManualHostRecoveryIT.java)：合成数据库验证源/目标实际TCP断连、同Runner恢复和重复执行。

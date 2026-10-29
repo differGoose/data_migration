@@ -44,6 +44,22 @@ source-sql 描述**预期最终数据**，target-sql 查询对应目标范围。
 
 phase-timeout约束普通E2E执行及其取消请求，查询也设置JDBC超时。调用方仍须给DataSource设置有限的连接/网络读取超时；Java无法安全强杀一个不响应中断的驱动调用，资源回收可能需要等待驱动返回。
 
+## 只模拟宿主调用：使用正式配置，不做额外E2E校验
+
+打开 [HostMigrationE2EIT](../src/test/java/com/datamigration/e2e/HostMigrationE2EIT.java)。这个测试类模拟宿主创建两个真实数据库连接池，直接调用正式的MigrationRunner.migrate，不调用DatabaseE2E，也不要求e2e配置段、校验SQL或外部Spring配置类。
+
+源、目标的JDBC URL、用户名、密码均留空，在本地填写六个常量，不要提交真实连接信息。将正式迁移配置放在src/test/resources/application.yml；测试默认通过classpath:application.yml加载。其中只需data-migration描述job-id、表映射和策略，格式与正式宿主一致，参考 [正式配置模板](../examples/migration.yml)。使用其他文件名时修改CONFIG_LOCATION。测试不创建数据库、表或源数据，业务表与审计表由使用者提前准备；写入和显式重导完全遵循正式引擎行为。
+
+```powershell
+mvn -B -ntp test-compile failsafe:integration-test failsafe:verify "-Dit.test=HostMigrationE2EIT" "-Dhost.e2e.enabled=true"
+```
+
+IDE为JUnit运行配置添加VM参数 `-Dhost.e2e.enabled=true` 后运行测试方法。默认跳过真实数据库入口；显式启用但未填写连接信息会报错，不回退到H2。两个池各4个连接，需要更多连接时同步调整容量常量；连接和读取超时由宿主按驱动配置。普通模式下迁移异常直接导致测试失败；没有额外的源/目标内容比对或自动重复执行，重复运行仍按正式job-id恢复逻辑处理。
+
+前文DatabaseE2E.run和下文ConfiguredDatabaseE2EIT仍是额外数据校验入口，才需要e2e配置。仅模拟真实宿主调用时，使用本节的HostMigrationE2EIT即可。
+
+需要迁移中手动断开或恢复source/target时，为同一测试额外设置 `-Dhost.e2e.manual=true`，通过本机控制页操作。仍只使用正式迁移配置，不要求e2e字段。代理地址、URL模板和完整步骤见 [手动代理迁移](manual-host-migration.md)。
+
 ## 方式二：main 或 Maven 运行
 
 因为独立进程拿不到你当前JVM里的Java对象，需提供一个仅注册源/目标DataSource的Spring配置类。它只是把你已有的数据源交出来，不需要实现新的接口。示例见 [配置类模板](../examples/e2e/ExternalDataSourcesConfiguration.java)，替换其中 YourExistingDataSources。数据源Bean必须带 `@MigrationSource(capacity=...)`、`@MigrationTarget(capacity=...)`，各一个；其他无标记DataSource不会被选中。
@@ -60,10 +76,10 @@ e2e:
 在仓库根目录执行（PowerShell保留引号）：
 
 ```powershell
-mvn -B -ntp -Presilience-dev verify "-Dit.test=ConfiguredDatabaseE2EIT" "-De2e.config=file:./e2e-local.yml"
+mvn -B -ntp verify "-Dit.test=ConfiguredDatabaseE2EIT" "-De2e.config=file:./e2e-local.yml"
 ```
 
-resilience-dev只添加Oracle/PostgreSQL测试驱动；不会准备数据库。默认 `mvn clean verify` 跳过这个入口，不连接真实数据库。
+Oracle/PostgreSQL驱动已默认提供，不需要额外Maven profile；测试不会准备数据库。默认 `mvn clean verify` 跳过这个入口，不连接真实数据库。
 
 IDE中运行 `com.datamigration.support.DatabaseE2E.main`，程序参数填写一个或多个配置位置，例如：
 
@@ -74,7 +90,7 @@ file:./e2e-local.yml
 或在PowerShell通过Java运行同一个main：
 
 ```powershell
-mvn -B -ntp -Presilience-dev test-compile dependency:build-classpath "-Dmdep.outputFile=target/test-classpath.txt" "-DincludeScope=test"
+mvn -B -ntp test-compile dependency:build-classpath "-Dmdep.outputFile=target/test-classpath.txt" "-DincludeScope=test"
 $testClasspath = "target/test-classes;target/classes;" + (Get-Content target/test-classpath.txt -Raw).Trim()
 java -cp $testClasspath com.datamigration.support.DatabaseE2E file:./e2e-local.yml
 ```
@@ -88,7 +104,7 @@ scenario支持MIGRATION、SOURCE_OUTAGE、TARGET_OUTAGE、APP_BEFORE_COMMIT、AP
 加载 [故障配置](../examples/e2e/fault.yml) 作为第二份文件：
 
 ```powershell
-mvn -B -ntp -Presilience-dev verify "-Dit.test=ConfiguredDatabaseE2EIT" "-De2e.config=file:./e2e-local.yml,file:examples/e2e/fault.yml"
+mvn -B -ntp verify "-Dit.test=ConfiguredDatabaseE2EIT" "-De2e.config=file:./e2e-local.yml,file:examples/e2e/fault.yml"
 ```
 
 配置两端真实upstream地址和端口。你提供的数据源必须把实际连接路由到本机代理端口：环境属性 `e2e.source-proxy.port` / `e2e.target-proxy.port` 在创建测试数据源前由父进程分配。配置类可从Environment读取它们。建议Bean使用@Lazy，避免预读场景时尝试建立连接。测试不替你修改DataSource内部连接地址。
