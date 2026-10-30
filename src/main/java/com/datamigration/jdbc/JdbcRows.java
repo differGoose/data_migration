@@ -1,6 +1,7 @@
 package com.datamigration.jdbc;
 
 import com.datamigration.conversion.ValueConverter;
+import com.datamigration.diagnostics.MigrationLog;
 import com.datamigration.model.*;
 import com.datamigration.execution.SqlErrors;
 import java.io.*;
@@ -16,17 +17,25 @@ public final class JdbcRows {
 
     public Counts copy(ResultSet source, PreparedStatement target, TableTask task, MigrationStrategy strategy,
                        boolean isolateRows, Progress progress) throws SQLException {
+        try { return copyRows(source, target, task, strategy, isolateRows, progress); }
+        catch (SQLException | RuntimeException failure) { MigrationLog.remember(failure); throw failure; }
+    }
+    private Counts copyRows(ResultSet source, PreparedStatement target, TableTask task, MigrationStrategy strategy,
+                       boolean isolateRows, Progress progress) throws SQLException {
         int[] columns = columns(source.getMetaData(), task.fields());
         long read = 0, written = 0, skipped = 0, bytes = 0;
         int pending = 0;
         long lastProgress = System.nanoTime();
-        while (source.next()) {
+        while (true) {
+            MigrationLog.stage("BATCH_READ", "source", "select-sql");
+            if (!source.next()) break;
             if (Thread.currentThread().isInterrupted()) throw new SQLException("Migration interrupted", "57014");
             read++;
             Savepoint savepoint = isolateRows ? target.getConnection().setSavepoint() : null;
             try (Row row = read(source, columns, task, strategy.maxLobSize())) {
                 if (row.streamed || isolateRows) {
                     if (pending > 0) { executeBatch(target, pending); pending = 0; bytes = 0; }
+                    MigrationLog.stage("BATCH_WRITE", "target", "insert-sql");
                     bind(target, task, row);
                     if (target.executeUpdate() != 1) throw new SQLException("INSERT must affect exactly one row", "P0003");
                     written++;
@@ -34,6 +43,7 @@ public final class JdbcRows {
                     if (pending > 0 && bytes + row.bytes > strategy.maxBatchBytes()) {
                         executeBatch(target, pending); pending = 0; bytes = 0;
                     }
+                    MigrationLog.stage("BATCH_WRITE", "target", "insert-sql");
                     bind(target, task, row);
                     target.addBatch(); pending++; bytes += row.bytes; written++;
                     if (pending >= task.batchSize() || bytes >= strategy.maxBatchBytes()) {
@@ -42,6 +52,7 @@ public final class JdbcRows {
                 }
             } catch (SQLException exception) {
                 if (!isolateRows || !SqlErrors.data(exception)) throw exception;
+                MigrationLog.stage("ROW_ROLLBACK", "target", "data-migration.strategy.skip-limit");
                 target.getConnection().rollback(savepoint);
                 target.clearParameters();
                 skipped++;
@@ -61,6 +72,7 @@ public final class JdbcRows {
     public static int[] columns(ResultSetMetaData metadata, List<FieldMapping> mappings) throws SQLException {
         int[] columns = new int[mappings.size()];
         for (int i = 0; i < mappings.size(); i++) {
+            MigrationLog.stage("FIELD_MAPPING", "source", "fields[" + i + "].source-column");
             for (int col = 1; col <= metadata.getColumnCount(); col++) {
                 if (mappings.get(i).sourceColumn().equalsIgnoreCase(metadata.getColumnLabel(col))) {
                     if (columns[i] != 0) throw new IllegalArgumentException("Ambiguous source column");
@@ -74,8 +86,10 @@ public final class JdbcRows {
 
     private Row read(ResultSet source, int[] columns, TableTask task, long maxLob) throws SQLException {
         Row row = new Row();
+        int fieldIndex = -1;
         try {
             for (int i = 0; i < columns.length; i++) {
+                fieldIndex = i;
                 int col = columns[i];
                 JDBCType sourceType = JDBCType.valueOf(source.getMetaData().getColumnType(col));
                 JDBCType targetType = task.fields().get(i).targetJdbcType();
@@ -128,6 +142,8 @@ public final class JdbcRows {
             }
             return row;
         } catch (SQLException | RuntimeException exception) {
+            MigrationLog.stage("FIELD_CONVERSION", "source", "fields[" + fieldIndex + "].target-jdbc-type");
+            // Remember only terminal errors in copyRows; row isolation may legitimately skip this one.
             try { row.close(); } catch (SQLException close) { exception.addSuppressed(close); }
             throw exception;
         }
@@ -146,6 +162,7 @@ public final class JdbcRows {
     }
 
     private static void executeBatch(PreparedStatement target, int expected) throws SQLException {
+        MigrationLog.stage("BATCH_WRITE", "target", "insert-sql");
         int[] counts = target.executeBatch();
         target.clearBatch();
         if (counts.length != expected) throw new SQLException("Unexpected batch result length", "P0003");

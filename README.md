@@ -15,6 +15,7 @@ An embeddable JDBC migration component for Java 17 / Spring Boot 4.1.1. The host
 | Pass real DataSources directly to E2E, or run through main/Maven configuration | [Real database E2E](docs/real-database-e2e.md) |
 | Simulate network outages and host crashes | [Resilience testing](docs/resilience-testing.md) |
 | Manually cut/restore source or target connections and resume the original job | [Manual host proxy testing](docs/manual-host-migration.md) |
+| Locate migration failures and configure pre-startup logging | [Logging and troubleshooting](docs/logging-and-troubleshooting.md) |
 | Find implementation details and tests | [Architecture](docs/architecture.md), [test index](docs/test-index.md) |
 
 ## Run before host startup

@@ -62,3 +62,5 @@ Additional external E2E entries and validation fixtures:
 - [support/ManualMigrationConsole.java](../src/test/java/com/datamigration/support/ManualMigrationConsole.java): local page for independent endpoint cut/restore and explicit run/finish controls.
 - [component/ManualMigrationConsoleTest.java](../src/test/java/com/datamigration/component/ManualMigrationConsoleTest.java): control access, execution exclusion, manual recovery, timeouts, and cancellation cleanup.
 - [e2e/ManualHostRecoveryIT.java](../src/test/java/com/datamigration/e2e/ManualHostRecoveryIT.java): synthetic databases verify actual source/target TCP disconnects, same-Runner recovery, and repeated execution.
+
+- [component/MigrationLoggingTest.java](../src/test/java/com/datamigration/component/MigrationLoggingTest.java): capture INFO/DEBUG/WARN/ERROR and verify configuration/endpoint diagnosis, concurrent batch attribution, original failure retention during commit uncertainty and secondary audit failures, sequence failure, and secret redaction.

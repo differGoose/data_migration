@@ -2,6 +2,14 @@
 
 Earlier entries below are historical acceptance evidence. Connection configuration and batching parameters have undergone breaking changes; use README and getting-started.md for current integration. Only JDK 17 is currently supported and verified. All dual-JDK, execution-lock, and fingerprint entries below are historical, not descriptions of current capabilities.
 
+## Key diagnostics and safe failure attribution (2026-10-30)
+
+Add com.datamigration SLF4J diagnostics: INFO for configuration, endpoint connections, budgets, table preflight, recovery/reuse, data commits, and sequence finalization; DEBUG for batches; WARN for bounded retries; ERROR for the original failure phase. Correlate runId/task/batch across threads. Keep only safe categories, property paths, SQLState, and vendor codes, without sending driver messages or exception stacks to the logger. MigrationException messages include failed tasks, statuses, and existing safe error codes. Audit structure and migration/retry transaction rules are unchanged.
+
+Full JDK 17 verification (Amazon Corretto 17.0.16), `mvn -B -ntp clean verify`, passed: 230 unit/component tests; 22 integration tests, with 19 passing and 3 real-database entries skipped by default. UT line coverage is 1221/1239 (98.55%); branch coverage is 720/822 (87.59%), retaining both original 85% gates. The 44 new logging cases cover missing/unknown configuration, budgets, both connection endpoints and transaction initialization, audit/business tables and fields, keys, concurrent batch failure, commit uncertainty, secondary audit failure, sequence finalization, and synthetic-secret redaction. Full verification log: target-logging-final17.log.
+
+Run BeforeStartupDemo in a standalone JDK 17 process: migration completion is logged before Spring Boot startup, repeated successful tasks reuse auditing, and the host then starts successfully. Log: target-logging-startup17.log. All 117 local documentation links passed. The host controls pre-startup logging; do not rely on Boot logging.level before Boot initializes it. See [logging and troubleshooting](logging-and-troubleshooting.md). No real Oracle/PostgreSQL connections were attempted. Existing sequence example comments are retained. These verification records were collected before commit/push.
+
 ## Simulated host manual proxies and default drivers (2026-10-30)
 
 Add HostMigrationE2EIT, calling the Runner directly with production classpath:application.yml and no e2e fields. Optional manual mode independently controls source/target through TCP proxies and a local run/cut/restore/finish page. After outages, the host evicts old pooled connections before the next explicit attempt without changing engine retry policies. Synthetic-H2 ManualHostRecoveryIT verifies actual source/target disconnects, same-Runner recovery, and repetition. The real entry creates neither H2 nor database objects.

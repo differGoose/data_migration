@@ -18,6 +18,12 @@ data-migration:
       primary-key: [ID]
       worker-count: 1
       mode: APPEND_RESUME
+      # Optional: calibrate a precreated TARGET sequence after the data commits.
+      # Disabled by default. Uncomment and replace the sequence/column names to enable.
+      # sequence:
+      #   enabled: true
+      #   name: customer_copy_id_seq
+      #   target-column: id
       select-sql: SELECT ID, NAME, AMOUNT FROM BUSINESS.CUSTOMER ORDER BY ID
       insert-sql: INSERT INTO customer_copy(id, name, amount) VALUES (?, ?, ?)
       fields:

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add key diagnostics for configuration, DataSources, connection budgets, table preflight, data commits, and sequence finalization. Use DEBUG for batches, WARN for bounded retries, and ERROR for failures. Correlate run/task/batch context across threads and retain the first safe failure stage with SQLState/vendor codes, without driver messages, SQL, or business data. Include failed tasks and safe summaries in MigrationException messages; document logging before host startup.
+
 - Add an optional manual proxy mode to the real host migration test. A local control page independently cuts/restores source and target connections and explicitly resumes the original job with unchanged configuration; no e2e configuration section is required.
 
 - Make Oracle ojdbc11 and PostgreSQL drivers default runtime dependencies for tests and host applications; remove the resilience-dev profile.

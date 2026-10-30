@@ -60,3 +60,7 @@ Keep configuration, actual databases, and source ranges unchanged during same-jo
 ## Validation boundaries
 
 Users supply real Oracle/PostgreSQL connections for manual mode. Local [ManualHostRecoveryIT](../src/test/java/com/datamigration/e2e/ManualHostRecoveryIT.java) prepares its own synthetic H2 to verify actual TCP disconnects, same-Runner recovery, and repeated calls. The real entry never uses it as a default or fallback environment.
+
+## Find the current migration phase
+
+The production Runner emits key INFO milestones, with separate phases for source/target connections, table preflight, data commits, and sequence finalization. Correlate messages by runId, task, and batch. For batch details, set com.datamigration to DEBUG in the host's logback-test.xml. See [logging and troubleshooting](logging-and-troubleshooting.md) for examples and configuration. Calls before host startup cannot rely on Boot logging.level settings that have not yet been applied.

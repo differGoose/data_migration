@@ -2,6 +2,8 @@
 
 This guide is for migration operators. Start with [getting-started.md](getting-started.md), read parameter definitions in [configuration.md](configuration.md), and use [resilience-testing.md](resilience-testing.md) for automated fault injection.
 
+See [logging and troubleshooting](logging-and-troubleshooting.md) to distinguish configuration, connection, table preflight, batch, and sequence failures. INFO reports key milestones; DEBUG provides batch details. The host controls the logging backend before startup.
+
 ## Before execution
 
 Keep the source query range unchanged throughout migration/recovery, pause target business writes, and confirm business/audit tables exist. Start with a small range of one table and record job-id, configuration version, and manual acceptance results. Do not change configuration or clear auditing while running or before same-job recovery. The component does not detect drift; operators must retain and reuse the original configuration.
