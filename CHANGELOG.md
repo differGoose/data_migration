@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 增加配置、数据源、容量、表预检、数据提交及 sequence 收尾关键日志；批次细节 DEBUG、有限重试 WARN、最终失败 ERROR。跨线程关联 runId/任务/批次，保留首个安全失败阶段与 SQLState/厂商码，不输出驱动消息、SQL 或业务数据。MigrationException 消息列出失败任务及安全摘要；新增启动前日志与排错指南。
+
 - 模拟宿主真实迁移测试增加可选手动代理模式，通过本机控制页分别切断/恢复源和目标，并用原配置、原job显式续跑；不要求e2e配置段。
 
 - Oracle ojdbc11和PostgreSQL驱动改为默认runtime依赖，测试和宿主运行时均可直接使用，移除resilience-dev profile。

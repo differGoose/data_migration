@@ -60,3 +60,7 @@ mvn -B -ntp test-compile failsafe:integration-test failsafe:verify "-Dit.test=Ho
 ## 验证边界
 
 手动模式的真实Oracle/PostgreSQL连接由使用者提供。本地 [ManualHostRecoveryIT](../src/test/java/com/datamigration/e2e/ManualHostRecoveryIT.java) 只使用自己准备的合成H2验证实际TCP断连、同Runner恢复及重复调用；它不会被真实入口用作默认或回退环境。
+
+## 查看迁移停在哪一步
+
+正式 Runner 默认输出 INFO 关键节点，源/目标连接、表配置预检、数据提交与 sequence 收尾分别有独立阶段。按 runId、task、batch 查找对应日志；逐批次定位可在宿主的 logback-test.xml 中将 com.datamigration 设为 DEBUG。典型失败及配置方法见 [日志与排错](logging-and-troubleshooting.md)。测试在正式宿主启动前调用时，不应依赖 Boot 尚未应用的 logging.level。

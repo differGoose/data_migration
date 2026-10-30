@@ -1,6 +1,7 @@
 package com.datamigration.sql;
 
 import com.datamigration.model.TableTask;
+import com.datamigration.diagnostics.MigrationLog;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.select.Select;
 import net.sf.jsqlparser.statement.insert.Insert;
@@ -31,6 +32,7 @@ public final class SqlSupport {
 
     public static String query(TableTask task) {
         try {
+            MigrationLog.stage("SQL_POLICY", "source", "select-sql");
             var parsed = CCJSqlParserUtil.parseStatements(task.selectSql()).getStatements();
             if (parsed.size() != 1 || !(parsed.get(0) instanceof Select))
                 throw new IllegalArgumentException("Source SQL must be one SELECT");
@@ -40,6 +42,7 @@ public final class SqlSupport {
                     || tokens.contains("INSERT") || tokens.contains("UPDATE") || tokens.contains("DELETE")
                     || tokens.contains("MERGE") || tokens.contains("CALL"))
                 throw new IllegalArgumentException("Source SQL must be a non-locking SELECT without parameters or sequence advancement");
+            MigrationLog.stage("SQL_POLICY", "target", "insert-sql");
             var inserts = CCJSqlParserUtil.parseStatements(task.insertSql()).getStatements();
             if (inserts.size() != 1 || !(inserts.get(0) instanceof Insert insert)
                     || !insert.getTable().getFullyQualifiedName().equalsIgnoreCase(table(task.targetTable())))
@@ -54,13 +57,17 @@ public final class SqlSupport {
                 throw new IllegalArgumentException("INSERT VALUES must contain exactly one row");
             if (writeTokens.stream().filter("?"::equals).count() != task.fields().size())
                 throw new IllegalArgumentException("INSERT parameter count differs from fields");
+            MigrationLog.stage("KEY_PREFLIGHT", "source", "primary-key");
             task.primaryKey().forEach(SqlSupport::identifier);
             return parsed.get(0).toString();
         } catch (IllegalArgumentException exception) {
+            MigrationLog.remember(exception);
             throw exception;
         } catch (Exception exception) {
             // Parser messages can include SQL literals: never propagate them.
-            throw new IllegalArgumentException("Cannot parse migration SQL");
+            var failure = new IllegalArgumentException("Cannot parse migration SQL");
+            MigrationLog.remember(failure);
+            throw failure;
         }
     }
 

@@ -14,6 +14,11 @@ data-migration:
       target-table: MIGRATION_TEST.CUSTOMER_COPY
       primary-key: [ID]
       mode: APPEND_RESUME
+      # Optional TARGET sequence finalization; this does not copy an Oracle sequence.
+      # sequence:
+      #   enabled: true
+      #   name: MIGRATION_TEST.CUSTOMER_COPY_ID_SEQ
+      #   target-column: ID
       select-sql: SELECT ID, NAME, AMOUNT FROM BUSINESS.CUSTOMER WHERE ID BETWEEN ${E2E_ID_MIN} AND ${E2E_ID_MAX} ORDER BY ID
       insert-sql: INSERT INTO MIGRATION_TEST.CUSTOMER_COPY(ID, NAME, AMOUNT) VALUES (?, ?, ?)
       fields:

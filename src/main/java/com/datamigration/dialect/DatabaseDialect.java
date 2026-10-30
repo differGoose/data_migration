@@ -1,6 +1,7 @@
 package com.datamigration.dialect;
 
 import com.datamigration.model.SequenceSpec;
+import com.datamigration.diagnostics.MigrationLog;
 import com.datamigration.sql.SqlSupport;
 import java.sql.*;
 
@@ -25,6 +26,7 @@ public enum DatabaseDialect {
     public void calibrate(Connection connection, String target, SequenceSpec sequence) throws SQLException {
         if (!sequence.enabled()) return;
         SqlSupport.table(sequence.name()); SqlSupport.identifier(sequence.targetColumn());
+        MigrationLog.stage("SEQUENCE_FINALIZE", "target", "sequence.target-column");
         Long maximum;
         try (var statement = connection.createStatement();
              var result = statement.executeQuery("SELECT MAX(" + sequence.targetColumn() + ") FROM " + SqlSupport.table(target))) {
@@ -35,6 +37,7 @@ public enum DatabaseDialect {
             catch (ArithmeticException exception) { throw new SQLException("Sequence ID exceeds BIGINT", "22003"); }
         }
         if (maximum == Long.MAX_VALUE) throw new SQLException("Sequence exhausted", "22003");
+        MigrationLog.stage("SEQUENCE_FINALIZE", "target", "sequence.name");
         String[] parts = canonicalTable(connection, sequence.name()).split("\\.");
         if (this == H2) {
             try (var query = connection.prepareStatement("SELECT BASE_VALUE,INCREMENT,CYCLE_OPTION FROM INFORMATION_SCHEMA.SEQUENCES" +

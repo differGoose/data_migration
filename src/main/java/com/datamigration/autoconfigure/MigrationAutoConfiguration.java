@@ -1,6 +1,7 @@
 package com.datamigration.autoconfigure;
 
 import com.datamigration.api.*;
+import com.datamigration.diagnostics.MigrationLog;
 import com.datamigration.conversion.*;
 import com.datamigration.execution.MigrationEngine;
 import com.datamigration.jdbc.DataSourceConnections;
@@ -32,15 +33,26 @@ public class MigrationAutoConfiguration {
     }
     private record Endpoint(DataSource dataSource, int capacity) { }
     private static Endpoint find(ConfigurableListableBeanFactory beans, Class<? extends Annotation> role) {
+        try (var diagnostic = MigrationLog.phase("DATASOURCE_RESOLVE", role == MigrationSource.class ? "source" : "target", "-")) {
+            try { return findEndpoint(beans, role); }
+            catch (RuntimeException failure) { MigrationLog.error("Host DataSource selection failed", failure); throw failure; }
+        }
+    }
+    private static Endpoint findEndpoint(ConfigurableListableBeanFactory beans, Class<? extends Annotation> role) {
         List<String> matches = new ArrayList<>();
         for (String name : beans.getBeanNamesForType(DataSource.class, true, false))
             if (beans.findAnnotationOnBean(name, role) != null) matches.add(name);
-        if (matches.size() != 1) throw new IllegalArgumentException("Require exactly one @" + role.getSimpleName() + " DataSource");
+        if (matches.size() != 1) {
+            MigrationLog.warn("Host DataSource role is missing or ambiguous", "matchingBeans=" + matches.size());
+            throw new IllegalArgumentException("Require exactly one @" + role.getSimpleName() + " DataSource");
+        }
         String name = matches.get(0);
         int capacity = role == MigrationSource.class ? beans.findAnnotationOnBean(name, MigrationSource.class).capacity()
                 : beans.findAnnotationOnBean(name, MigrationTarget.class).capacity();
         if (capacity < 1) throw new IllegalArgumentException("Migration capacity must be positive");
-        return new Endpoint(beans.getBean(name, DataSource.class), capacity);
+        var dataSource = beans.getBean(name, DataSource.class);
+        MigrationLog.info("Host DataSource selected", "bean=" + MigrationLog.safe(name) + " capacity=" + capacity);
+        return new Endpoint(dataSource, capacity);
     }
     public static final class SpringMigrationService implements MigrationService, AutoCloseable {
         private final Environment environment;
@@ -55,6 +67,9 @@ public class MigrationAutoConfiguration {
             this.environment=environment; this.configuration=configuration; this.beans=beans; this.converter=converter; this.engines=engines;
         }
         public MigrationResult migrate() {
+            try (var invocation = MigrationLog.invocation()) { return migrateScoped(); }
+        }
+        private MigrationResult migrateScoped() {
             synchronized (this) {
                 if (closed) throw new IllegalStateException("Migration service is closed");
             }

@@ -62,3 +62,5 @@
 - [support/ManualMigrationConsole.java](../src/test/java/com/datamigration/support/ManualMigrationConsole.java)：本机控制页，独立切断/恢复两端代理、显式执行与结束测试。
 - [component/ManualMigrationConsoleTest.java](../src/test/java/com/datamigration/component/ManualMigrationConsoleTest.java)：控制访问、运行互斥、手动恢复、超时及取消清理。
 - [e2e/ManualHostRecoveryIT.java](../src/test/java/com/datamigration/e2e/ManualHostRecoveryIT.java)：合成数据库验证源/目标实际TCP断连、同Runner恢复和重复执行。
+
+- [component/MigrationLoggingTest.java](../src/test/java/com/datamigration/component/MigrationLoggingTest.java)：捕获 INFO/DEBUG/WARN/ERROR，验证配置与端点定位、并发批次归属、提交未知及二次审计失败保留原始原因、sequence 失败和秘密不泄漏。

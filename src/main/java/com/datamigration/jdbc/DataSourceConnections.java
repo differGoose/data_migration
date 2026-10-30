@@ -1,6 +1,7 @@
 package com.datamigration.jdbc;
 
 import java.lang.reflect.*;
+import com.datamigration.diagnostics.MigrationLog;
 import java.sql.*;
 import java.util.*;
 import javax.sql.DataSource;
@@ -15,18 +16,31 @@ public final class DataSourceConnections implements ConnectionAccess {
         this.target = Objects.requireNonNull(target, "target DataSource");
     }
 
-    public Connection openSourceConnection() throws SQLException { return borrow(source); }
-    public Connection openTargetConnection() throws SQLException { return borrow(target); }
+    public Connection openSourceConnection() throws SQLException { return borrow(source, "source"); }
+    public Connection openTargetConnection() throws SQLException { return borrow(target, "target"); }
 
-    private Connection borrow(DataSource dataSource) throws SQLException {
+    private Connection borrow(DataSource dataSource, String endpoint) throws SQLException {
+        try (var diagnostic = MigrationLog.phase("CONNECTION_ACQUIRE", endpoint, "-")) {
+            MigrationLog.connecting(endpoint);
+            MigrationLog.debug("Borrowing host connection", "");
+            try { return initialize(dataSource, endpoint); }
+            catch (SQLException | RuntimeException failure) { MigrationLog.remember(failure); throw failure; }
+        }
+    }
+    private Connection initialize(DataSource dataSource, String endpoint) throws SQLException {
         Connection raw;
         try { raw = dataSource.getConnection(); }
-        catch (SQLException | RuntimeException failure) { throw sanitized("Cannot borrow migration connection", failure); }
+        catch (SQLException | RuntimeException failure) {
+            MigrationLog.remember(failure);
+            throw sanitized("Cannot borrow migration connection", failure);
+        }
+        MigrationLog.stage("CONNECTION_INITIALIZE", endpoint, "-");
         try {
             boolean autoCommit = raw.getAutoCommit();
             int isolation = raw.getTransactionIsolation();
             raw.setAutoCommit(false);
             raw.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+            MigrationLog.connected(endpoint);
             return (Connection) Proxy.newProxyInstance(getClass().getClassLoader(), new Class<?>[]{Connection.class},
                     new InvocationHandler() {
                         private boolean closed;
@@ -39,7 +53,23 @@ public final class DataSourceConnections implements ConnectionAccess {
                                     raw.rollback();
                                     raw.setTransactionIsolation(isolation);
                                     raw.setAutoCommit(autoCommit);
-                                } finally { raw.close(); }
+                                } catch (SQLException | RuntimeException failure) {
+                                    try (var cleanup = MigrationLog.phase("CONNECTION_CLEANUP", endpoint, "-")) {
+                                        MigrationLog.remember(failure);
+                                        MigrationLog.secondary("Host connection transaction cleanup failed", failure);
+                                    }
+                                    throw failure;
+                                } finally {
+                                    try { raw.close(); }
+                                    catch (SQLException failure) {
+                                        try (var cleanup = MigrationLog.phase("CONNECTION_CLEANUP", endpoint, "-")) {
+                                            MigrationLog.remember(failure);
+                                            MigrationLog.secondary("Host connection return failed", failure);
+                                        }
+                                        throw failure;
+                                    }
+                                }
+                                MigrationLog.debug("Host connection returned", "endpoint=" + endpoint);
                                 return null;
                             }
                             try { return method.invoke(raw, args); }
@@ -47,6 +77,7 @@ public final class DataSourceConnections implements ConnectionAccess {
                         }
                     });
         } catch (SQLException | RuntimeException failure) {
+            MigrationLog.remember(failure);
             try { raw.close(); } catch (SQLException ignored) { }
             throw sanitized("Cannot initialize migration connection", failure);
         }

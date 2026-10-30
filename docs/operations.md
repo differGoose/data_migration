@@ -2,6 +2,8 @@
 
 本篇面向实际执行迁移的人。首次接入见 [getting-started.md](getting-started.md)，参数含义见 [configuration.md](configuration.md)，主动制造故障的自动化测试见 [resilience-testing.md](resilience-testing.md)。
 
+定位配置、连接、表预检、批次或 sequence 失败，见 [日志与排错](logging-and-troubleshooting.md)。默认 INFO 输出关键节点；逐批次细节使用 DEBUG。启动前调用的日志后端由宿主管理。
+
 ## 执行前确认什么
 
 确定源查询范围在整个迁移和恢复期间不变，目标停止业务写入；确认目标表和审计表已经建好。首次先选一张表的小范围试跑，保存 job-id、配置版本和人工验收结果。不要在运行中或同 job 恢复前改配置或清理审计表。组件不检测配置漂移，操作方需保存并使用原配置。

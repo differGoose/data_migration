@@ -1,6 +1,7 @@
 package com.datamigration.audit;
 
 import com.datamigration.sql.KeyCodec;
+import com.datamigration.diagnostics.MigrationLog;
 import com.datamigration.sql.SqlSupport;
 import java.sql.*;
 import java.util.*;
@@ -16,6 +17,9 @@ public final class CheckpointStore {
     public String table() { return table; }
 
     public Checkpoint find(Connection connection, long batch, boolean lock) throws SQLException {
+        return inAudit("CHECKPOINT_READ", () -> findScoped(connection, batch, lock));
+    }
+    private Checkpoint findScoped(Connection connection, long batch, boolean lock) throws SQLException {
         String sql = "SELECT * FROM " + table + " WHERE job_id=? AND task_name=? AND batch_no=?" +
                 (lock ? " FOR UPDATE" : "");
         try (var statement = statement(connection, sql)) {
@@ -25,6 +29,9 @@ public final class CheckpointStore {
     }
 
     public List<Checkpoint> pending(Connection connection, int limit) throws SQLException {
+        return inAudit("CHECKPOINT_READ", () -> pendingScoped(connection, limit));
+    }
+    private List<Checkpoint> pendingScoped(Connection connection, int limit) throws SQLException {
         try (var statement = statement(connection, "SELECT * FROM " + table +
                 " WHERE job_id=? AND task_name=? AND batch_no>0 AND state<>'SUCCEEDED' ORDER BY batch_no")) {
             statement.setString(1, job); statement.setString(2, task); statement.setMaxRows(limit);
@@ -37,6 +44,9 @@ public final class CheckpointStore {
     }
 
     public Checkpoint last(Connection connection) throws SQLException {
+        return inAudit("CHECKPOINT_READ", () -> lastScoped(connection));
+    }
+    private Checkpoint lastScoped(Connection connection) throws SQLException {
         try (var statement = statement(connection, "SELECT * FROM " + table +
                 " WHERE job_id=? AND task_name=? AND batch_no>0 ORDER BY batch_no DESC")) {
             statement.setString(1, job); statement.setString(2, task); statement.setMaxRows(1);
@@ -45,6 +55,10 @@ public final class CheckpointStore {
     }
 
     public void create(Connection connection, long batch, String target,
+                       List<KeyCodec.Value> lower, List<KeyCodec.Value> upper, long expected) throws SQLException {
+        inAudit("RANGE_PLAN_AUDIT", () -> { createScoped(connection, batch, target, lower, upper, expected); return null; });
+    }
+    private void createScoped(Connection connection, long batch, String target,
                        List<KeyCodec.Value> lower, List<KeyCodec.Value> upper, long expected) throws SQLException {
         try (var statement = statement(connection, "INSERT INTO " + table +
                 " (job_id,task_name,batch_no,target_table,lower_key,upper_key,expected_rows,state)" +
@@ -80,6 +94,9 @@ public final class CheckpointStore {
 
     /** Called before business commit on the SAME connection. Locks the table summary to enforce skip budget. */
     public void complete(Connection connection, long batch, long committed, long skipped, long skipLimit) throws SQLException {
+        inAudit("AUDIT_UPDATE", () -> { completeScoped(connection, batch, committed, skipped, skipLimit); return null; });
+    }
+    private void completeScoped(Connection connection, long batch, long committed, long skipped, long skipLimit) throws SQLException {
         Checkpoint summary = find(connection, 0, true);
         if (batch > 0 && summary.skipped() + skipped > skipLimit)
             throw new SQLException("Per-table skip budget exceeded", "P0001");
@@ -91,6 +108,9 @@ public final class CheckpointStore {
     }
 
     public void reconcile(Connection connection) throws SQLException {
+        inAudit("AUDIT_UPDATE", () -> { reconcileScoped(connection); return null; });
+    }
+    private void reconcileScoped(Connection connection) throws SQLException {
         try (var statement = statement(connection, "SELECT COALESCE(SUM(committed_rows),0),COALESCE(SUM(skipped_rows),0)" +
                 " FROM " + table + " WHERE job_id=? AND task_name=? AND batch_no>0 AND state='SUCCEEDED'")) {
             statement.setString(1, job); statement.setString(2, task);
@@ -102,6 +122,9 @@ public final class CheckpointStore {
     }
 
     public void check(Connection connection) throws SQLException {
+        inAudit("AUDIT_CHECK", () -> { checkScoped(connection); return null; });
+    }
+    private void checkScoped(Connection connection) throws SQLException {
         try (var statement = statement(connection, "SELECT job_id,task_name,batch_no,state," +
                 "prepared,data_complete,planning_complete,lower_key,upper_key FROM " + table + " WHERE 1=0")) {
             statement.executeQuery().close();
@@ -109,12 +132,23 @@ public final class CheckpointStore {
     }
 
     private void update(Connection connection, String assignments, long batch, Object... values) throws SQLException {
+        inAudit("AUDIT_UPDATE", () -> { updateScoped(connection, assignments, batch, values); return null; });
+    }
+    private void updateScoped(Connection connection, String assignments, long batch, Object... values) throws SQLException {
         try (var statement = statement(connection, "UPDATE " + table + " SET " + assignments +
                 ",updated_at=CURRENT_TIMESTAMP WHERE job_id=? AND task_name=? AND batch_no=?")) {
             int index = 1;
             for (Object value : values) statement.setObject(index++, value);
             statement.setString(index++, job); statement.setString(index++, task); statement.setLong(index, batch);
             if (statement.executeUpdate() != 1) throw new SQLException("Missing checkpoint record", "P0002");
+        }
+    }
+
+    @FunctionalInterface private interface AuditWork<T> { T call() throws SQLException; }
+    private <T> T inAudit(String stage, AuditWork<T> work) throws SQLException {
+        try (var diagnostic = MigrationLog.phase(stage, "target", "data-migration.strategy.audit.table-name")) {
+            try { return work.call(); }
+            catch (SQLException | RuntimeException failure) { MigrationLog.remember(failure); throw failure; }
         }
     }
 

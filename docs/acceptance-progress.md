@@ -2,6 +2,14 @@
 
 以下早期记录为历史验收证据；连接配置和批量参数已进行破坏性改造，当前接入方式以 README 和 getting-started.md 为准。当前仅支持与验证 JDK 17；本文下方所有双版本、执行锁和指纹记录均为历史，不代表当前能力。
 
+## 关键节点日志与安全失败定位（2026-10-30）
+
+新增 com.datamigration SLF4J 日志：INFO 输出配置、端点连接、容量、表预检、恢复/跳过、数据提交与 sequence 收尾；DEBUG 输出批次细节，WARN 输出有限重试，ERROR 保留原始失败阶段。runId、任务和批次关联跨线程日志；错误仅保存安全分类、属性路径及 SQLState/厂商码，不传递驱动消息或异常堆栈给 logger。MigrationException 消息列出失败任务、状态及已有安全错误码。未改变审计结构或迁移/重试事务规则。
+
+JDK17（Amazon Corretto 17.0.16）完整 `mvn -B -ntp clean verify` 通过：230项单元/组件测试；22项集成测试中19项执行通过、3项真实入口默认跳过。UT行覆盖1221/1239（98.55%），分支720/822（87.59%），原各85%门槛通过。新增44项日志测试覆盖未知/缺失配置、容量、两端连接及事务初始化、审计/业务表和字段、主键、并发批次失败、提交未知、二次审计失败、sequence及模拟秘密不泄漏。完整验证日志为target-logging-final17.log。
+
+在独立JDK17进程运行BeforeStartupDemo，确认迁移完成日志早于Spring Boot启动，成功任务重复调用复用审计结果，最后正常启动宿主；日志为target-logging-startup17.log。117个本地文档链接检查通过。启动前日志后端由宿主管理，不依赖尚未应用的Boot logging.level，见 [日志与排错](logging-and-troubleshooting.md)。本轮没有连接真实Oracle/PostgreSQL数据库，既有sequence示例注释保留，未提交或推送。
+
 ## 模拟宿主手动代理与默认驱动（2026-10-30）
 
 新增HostMigrationE2EIT，使用正式classpath:application.yml直接调用Runner，不要求e2e字段。可选手动模式以两个TCP代理分别控制源、目标；本机控制页显式执行、切断、恢复及结束。断网失败后由宿主在下一次显式执行前淘汰旧池连接，不修改引擎重试策略。源/目标实际断连、同Runner恢复及重复调用由合成H2的ManualHostRecoveryIT验证；真实入口不创建H2或数据库对象。

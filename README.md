@@ -15,6 +15,7 @@
 | 把真实DataSource直接交给E2E，或通过配置main/Maven执行 | [真实数据库E2E](docs/real-database-e2e.md) |
 | 模拟断网和宿主崩溃 | [恢复测试](docs/resilience-testing.md) |
 | 手动断开/恢复source或target，再调用原job续跑 | [模拟宿主手动代理测试](docs/manual-host-migration.md) |
+| 迁移失败定位与启动前日志 | [日志与排错](docs/logging-and-troubleshooting.md) |
 | 实现原理与测试位置 | [架构](docs/architecture.md)、[测试索引](docs/test-index.md) |
 
 ## 启动前执行
