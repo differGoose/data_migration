@@ -1,5 +1,7 @@
 package com.datamigration.component;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
 import com.datamigration.autoconfigure.MigrationAutoConfiguration;
 import com.datamigration.properties.MigrationConfiguration;
@@ -25,7 +27,7 @@ class MigrationAutoConfigurationTest {
         base.run(c -> {
             assertThat(c).hasSingleBean(MigrationService.class).doesNotHaveBean(org.springframework.boot.ApplicationRunner.class)
                 .doesNotHaveBean(DataSource.class);
-            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("Missing data-migration");
+            assertThatThrownBy(() -> await(c.getBean(MigrationService.class))).hasMessageContaining("Missing data-migration");
         });
     }
     @ParameterizedTest @ValueSource(strings={
@@ -41,7 +43,7 @@ class MigrationAutoConfigurationTest {
         "data-migration.strategy.audit.table-name=unsafe;sql", "data-migration.tables[0].fields="})
     void invalidAndRemovedPropertiesAreRejected(String property) {
         base.withPropertyValues(properties()).withPropertyValues(property).run(c ->
-            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate())
+            assertThatThrownBy(() -> await(c.getBean(MigrationService.class)))
                 .isInstanceOf(org.springframework.boot.context.properties.bind.BindException.class));
     }
     @Configuration(proxyBeanMethods=false) static class Host {
@@ -69,21 +71,21 @@ class MigrationAutoConfigurationTest {
     @Test void implementationTypeAnnotationsSelectOnlyMigrationSources() {
         base.withPropertyValues(properties()).withUserConfiguration(TypeHost.class).run(c -> {
             assertThat(c.getBeansOfType(DataSource.class)).hasSize(3);
-            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).isInstanceOf(MigrationException.class);
+            assertThatThrownBy(() -> await(c.getBean(MigrationService.class))).isInstanceOf(MigrationException.class);
         });
     }
     @Test void missingDuplicateAndInvalidRoleDeclarationsFail() {
-        base.withPropertyValues(properties()).run(c -> assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("MigrationSource"));
+        base.withPropertyValues(properties()).run(c -> assertThatThrownBy(() -> await(c.getBean(MigrationService.class))).hasMessageContaining("MigrationSource"));
         base.withPropertyValues(properties()).withUserConfiguration(Host.class, Duplicate.class).run(c ->
-            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("exactly one"));
+            assertThatThrownBy(() -> await(c.getBean(MigrationService.class))).hasMessageContaining("exactly one"));
         base.withPropertyValues(properties()).withUserConfiguration(InvalidCapacity.class).run(c ->
-            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).hasMessageContaining("positive"));
+            assertThatThrownBy(() -> await(c.getBean(MigrationService.class))).hasMessageContaining("positive"));
     }
     @Test void hostBeansArePreservedAndAnnotatedConnectionsUsed() {
         base.withPropertyValues(properties()).withUserConfiguration(Host.class).run(c -> {
             assertThat(c.getBeansOfType(DataSource.class)).hasSize(2);
             assertThat(c).hasSingleBean(DataSourceTransactionManager.class);
-            assertThatThrownBy(() -> c.getBean(MigrationService.class).migrate()).isInstanceOf(MigrationException.class);
+            assertThatThrownBy(() -> await(c.getBean(MigrationService.class))).isInstanceOf(MigrationException.class);
             var properties=c.getBean(MigrationConfiguration.class).get();
             assertThat(properties.tables().get(0).batchSize()).isEqualTo(1000);
             assertThat(properties.toString()).doesNotContain("SELECT");
@@ -91,9 +93,14 @@ class MigrationAutoConfigurationTest {
         });
     }
     @Test void customServiceAndEngineCanOverrideDefaults() {
-        MigrationService service=() -> new MigrationResult(java.util.UUID.randomUUID(),java.time.Instant.now(),java.time.Instant.now(),java.util.List.of());
+        var expected = new MigrationResult(java.util.UUID.randomUUID(), java.time.Instant.now(), java.time.Instant.now(), java.util.List.of());
+        var asynchronous = new com.datamigration.execution.AsyncMigration(monitor -> expected);
+        MigrationService service = new MigrationService() {
+            public MigrationExecution migrate() { return asynchronous.startSync(); }
+            public MigrationExecution migrateAsync() { return asynchronous.start(); }
+        };
         base.withBean(MigrationService.class, () -> service).run(c -> assertThat(c.getBean(MigrationService.class)).isSameAs(service));
-        base.withPropertyValues(properties()).withBean(com.datamigration.execution.MigrationEngine.class, () -> plan -> service.migrate())
-            .run(c -> assertThat(c.getBean(MigrationService.class).migrate()).isNotNull());
+        base.withPropertyValues(properties()).withBean(com.datamigration.execution.MigrationEngine.class, () -> plan -> await(service))
+            .run(c -> assertThat(await(c.getBean(MigrationService.class))).isNotNull());
     }
 }

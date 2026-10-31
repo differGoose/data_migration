@@ -1,5 +1,7 @@
 package com.datamigration.component;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -67,13 +69,13 @@ class MigrationLoggingTest {
             db.seed("A", 21); db.seed("B", 12);
             try (var migration = runner(db, configuration("A", "B")).build()) {
                 events.clear();
-                var result = migration.migrate();
+                var result = await(migration);
                 assertThat(messages()).contains("configuration binding succeeded", "requiredSource=4 declaredSource=8",
                         "Table preflight succeeded", "Table data committed", "Sequence finalization completed", "failedTables=0");
                 assertThat(messages()).doesNotContain("Batch started", "Batch committed", "Borrowing host connection", "row-1");
                 assertThat(events).allSatisfy(event -> assertThat(event.getFormattedMessage()).contains("runId=" + result.runId()));
-                migration.migrate();
-                assertThat(messages()).contains("Table already succeeded; reusing audited result");
+                await(migration);
+                assertThat(messages()).contains("Migration already succeeded; returning existing result");
             }
         }
     }
@@ -101,7 +103,7 @@ class MigrationLoggingTest {
             var builder = runner(db, configuration("A"));
             if (endpoint.equals("source")) builder.source(broken, 8); else builder.target(broken, 8);
             try (var migration = builder.build()) {
-                var failure = catchThrowableOfType(migration::migrate, MigrationException.class);
+                var failure = catchThrowableOfType(() -> await(migration), MigrationException.class);
                 assertThat(failure.getMessage()).contains("A [FAILED", "SQLSTATE=28P01").doesNotContain(SECRET);
                 assertThat(messages()).contains("stage=CONNECTION_ACQUIRE endpoint=" + endpoint, "category=AUTHENTICATION_FAILURE");
             }
@@ -118,7 +120,7 @@ class MigrationLoggingTest {
             var builder = runner(db, configuration("A"));
             if (endpoint.equals("source")) builder.source(broken, 8); else builder.target(broken, 8);
             try (var migration = builder.build()) {
-                assertThatThrownBy(migration::migrate).isInstanceOf(MigrationException.class);
+                assertThatThrownBy(() -> await(migration)).isInstanceOf(MigrationException.class);
                 assertThat(messages()).contains("stage=CONNECTION_INITIALIZE endpoint=" + endpoint, "category=CONNECTION_FAILURE");
             }
         }
@@ -132,7 +134,7 @@ class MigrationLoggingTest {
             else if (kind.equals("type")) env.withProperty("data-migration.tables[0].fields[0].target-jdbc-type", SECRET);
             else env.withProperty("data-migration.strategy.unknown-property", SECRET);
             try (var migration = runner(db, env).build()) {
-                assertThatThrownBy(migration::migrate).isInstanceOf(RuntimeException.class);
+                assertThatThrownBy(() -> await(migration)).isInstanceOf(RuntimeException.class);
                 assertThat(messages()).contains("stage=CONFIG_BIND");
                 if (kind.equals("batch-size")) assertThat(messages()).contains("data-migration.tables[0].batch-size", "constraint=Min");
                 if (kind.equals("unknown-property")) assertThat(messages()).contains("data-migration.strategy.unknown-property", "UNKNOWN_PROPERTY");
@@ -147,7 +149,7 @@ class MigrationLoggingTest {
                 .configLocations(directory.resolve("missing.yml").toUri().toString()).build()).isInstanceOf(RuntimeException.class);
         assertThat(messages()).contains("stage=CONFIG_LOAD", "CONFIGURATION_RESOURCE_NOT_FOUND");
         try (var migration = MigrationRunner.builder().source(ds, 1).target(ds, 1).environment(configuration("A")).build()) {
-            assertThatThrownBy(migration::migrate).hasMessageContaining("Insufficient pool capacity");
+            assertThatThrownBy(() -> await(migration)).hasMessageContaining("Insufficient pool capacity");
             assertThat(messages()).contains("stage=CAPACITY_CHECK", "requiredSource=2 declaredSource=1");
         }
         verifyNoInteractions(ds);
@@ -166,7 +168,7 @@ class MigrationLoggingTest {
                 case "sql" -> env.withProperty("data-migration.tables[0].select-sql", "SELECT '" + SECRET + "' FROM");
             }
             try (var migration = runner(db, env).build()) {
-                assertThatThrownBy(migration::migrate).isInstanceOf(MigrationException.class);
+                assertThatThrownBy(() -> await(migration)).isInstanceOf(MigrationException.class);
                 String expected = switch (kind) {
                     case "source-table" -> "stage=SOURCE_PREFLIGHT endpoint=source";
                     case "target-table" -> "stage=TARGET_PREFLIGHT endpoint=target";
@@ -215,14 +217,14 @@ class MigrationLoggingTest {
         try (var db = new DatabaseFixture()) {
             db.seed("A", 20); db.target("ALTER TABLE A ADD CONSTRAINT bad CHECK(ID<>9)");
             try (var migration = runner(db, configuration("A")).build()) {
-                assertThatThrownBy(migration::migrate).isInstanceOf(MigrationException.class);
+                assertThatThrownBy(() -> await(migration)).isInstanceOf(MigrationException.class);
                 assertThat(messages()).contains("Batch migration failed", "stage=BATCH_WRITE endpoint=target",
                         "property=data-migration.tables[0].insert-sql", "category=CONSTRAINT_VIOLATION");
                 assertThat(events).filteredOn(e -> e.getFormattedMessage().startsWith("Table migration failed"))
                         .allSatisfy(event -> assertThat(event.getFormattedMessage()).contains("batch=2", "stage=BATCH_WRITE endpoint=target"));
                 db.source("DELETE FROM A WHERE ID=1");
                 events.clear();
-                assertThatThrownBy(migration::migrate).isInstanceOf(MigrationException.class);
+                assertThatThrownBy(() -> await(migration)).isInstanceOf(MigrationException.class);
                 assertThat(messages()).contains("stage=SOURCE_COUNT endpoint=source", "reason=Source row count changed");
             }
         }
@@ -271,7 +273,7 @@ class MigrationLoggingTest {
                 .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                         com.datamigration.autoconfigure.MigrationAutoConfiguration.class))
                 .withPropertyValues(MigrationAutoConfigurationTest.properties())
-                .run(context -> assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate())
+                .run(context -> assertThatThrownBy(() -> await(context.getBean(MigrationService.class)))
                         .hasMessageContaining("MigrationSource"));
         assertThat(messages()).contains("stage=DATASOURCE_RESOLVE endpoint=source", "matchingBeans=0");
     }

@@ -1,10 +1,9 @@
 package com.datamigration.support;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
-import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.ValueConverter;
-import com.datamigration.execution.JdbcMigrationEngine;
-import com.datamigration.jdbc.ConnectionAccess;
 import com.datamigration.properties.MigrationConfiguration;
 import java.lang.reflect.*;
 import java.nio.file.*;
@@ -56,7 +55,7 @@ public final class ResilienceWorker {
                 try (var runner = MigrationRunner.builder().source(sourceDataSource,source.capacity())
                         .target(decorated,target.capacity()).environment(context.getEnvironment())
                         .converter(context.getBean(ValueConverter.class)).build()) {
-                    runner.migrate();
+                    await(runner);
                 }
             }
         } catch (MigrationException e) { exit = 20; }

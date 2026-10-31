@@ -20,13 +20,16 @@
 
 MigrationRunner 接收宿主提供的两个 DataSource，使用 ConfigData 加载配置但不创建 Spring 容器。Spring 包装通过 AutoConfiguration.imports 自动发现，按源/目标标记选择宿主 DataSource，第一次调用绑定并缓存规则，不注册 ApplicationRunner。没有 REST 接口，不参与宿主业务事务。
 
-DataSourceConnections 只借用连接，设置 READ_COMMITTED、autoCommit=false，结束未完成事务后恢复宿主事务属性并归还；回滚失败时不会启用 autoCommit 以免意外提交。Runner/Spring 关闭只关闭引擎，数据源始终由宿主管理。不再读取端点元数据计算身份；恢复时实际端点与配置不变由调用方保证。
+DataSourceConnections 只借用连接，设置 READ_COMMITTED、autoCommit=false，结束未完成事务后恢复宿主事务属性并归还；回滚失败时不会启用 autoCommit 以免意外提交。Runner/Spring 关闭会停止后台调用并等待引擎工作线程及事务清理，数据源始终由宿主管理。不再读取端点元数据计算身份；恢复时实际端点与配置不变由调用方保证。
 
 仅支持和验证 JDK 17。ExecutorScope 在离开作用域时 shutdown 并等待所有任务结束；等待被中断时 shutdownNow，继续等待资源清理完成，最后恢复调用线程的中断标志。该实现替代新版 JDK 的 ExecutorService.close，保持事务回滚和 Spring 关闭顺序。
 
 ```mermaid
 flowchart TD
-    A[MigrationService.migrate] --> B[绑定校验与连接预算]
+    A[migrate 或 migrateAsync] --> R{同实例已有执行?}
+    R -->|运行中或已成功| S[返回同一执行句柄和最新进度]
+    R -->|未执行或上轮失败| T[创建后台执行]
+    T --> B[绑定校验与连接预算]
     B --> C[tryAcquire JVM共享许可]
     C --> D[有界表调度]
     D --> E[SQL及映射预检]
@@ -75,7 +78,7 @@ YAML 是受信任管理员配置。JSqlParser 验证单个 SELECT 和目标 INSE
 
 ## JVM 执行协调与事务行锁
 
-默认 JdbcMigrationEngine 公共 execute 入口使用 static、单许可 Semaphore.tryAcquire。已有迁移执行时，不论 Runner、Spring Context 或目标表是否不同，重叠调用都立即失败，且拒绝前不借连接。单个 Runner / 引擎也禁止自身重入。自定义 MigrationEngine 由宿主负责自己的执行协调。
+默认 JdbcMigrationEngine 公共 execute 入口使用 static、单许可 Semaphore.tryAcquire。同一 Runner/Service 的同步与异步入口在进入引擎前合并重复触发，返回同一个执行句柄；成功后缓存结果、失败后显式重试。不同 Runner、Spring Context 或目标表的引擎重叠执行仍立即失败，且拒绝前不借连接。进度观察器只在原事务确认提交、恢复检查点与表阶段切换时更新内存，不额外查询审计库。自定义 MigrationEngine 由宿主负责自己的执行协调。
 
 许可属于实际执行调用；close 只请求取消并等待清理，不释放许可。成功、异常、中断及取消均经 ExecutorScope 等待所有表和 worker 退出、连接事务结束后，最后在 execute 的 finally 归还许可。关闭未执行的 Runner 不影响正在运行的迁移。
 
@@ -93,4 +96,4 @@ JdbcRows 按行读取，普通 JDBC batch 同时受 batch-size 与 max-batch-byt
 
 ## 验证层次
 
-单元/组件测试验证事务、边界、配置、SQL、JDBC 契约及故障注入；JaCoCo 只统计 Surefire，不包含 Failsafe E2E。E2E 使用两个真实 H2 TCP 服务、独立文件数据库、Spring YAML 与方法入口，覆盖 10,000 行、TLS 信任验证、断连与新 JVM 恢复。PostgreSQL 方言的 mock JDBC 测试不替代真实 PostgreSQL；真实 Oracle TCPS、PostgreSQL 驱动、IAM/ECS 需在相应环境另行验收。
+单元/组件测试验证事务、边界、配置、SQL、JDBC 契约及故障注入；JaCoCo 只统计 Surefire，不包含 Failsafe E2E。E2E 使用两个真实 H2 TCP 服务、独立文件数据库、Spring YAML 与方法入口，覆盖 10,000 行、断连与新 JVM 恢复。PostgreSQL 方言的 mock JDBC 测试不替代真实 PostgreSQL；真实驱动与业务数据需实际环境验收。认证、TLS、连接池及部署由宿主管理。

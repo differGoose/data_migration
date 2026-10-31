@@ -3,7 +3,7 @@ package com.datamigration.autoconfigure;
 import com.datamigration.api.*;
 import com.datamigration.diagnostics.MigrationLog;
 import com.datamigration.conversion.*;
-import com.datamigration.execution.MigrationEngine;
+import com.datamigration.execution.*;
 import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.properties.MigrationConfiguration;
 import org.springframework.beans.factory.ObjectProvider;
@@ -27,9 +27,9 @@ public class MigrationAutoConfiguration {
         return new DataSourceConnections(find(beans, MigrationSource.class).dataSource(), find(beans, MigrationTarget.class).dataSource());
     }
     @Bean(destroyMethod = "close") @ConditionalOnMissingBean(MigrationService.class)
-    SpringMigrationService migrationService(Environment environment, MigrationConfiguration configuration,
+    SpringMigrationService migrationService(MigrationConfiguration configuration,
             ConfigurableListableBeanFactory beans, ValueConverter converter, ObjectProvider<MigrationEngine> engines) {
-        return new SpringMigrationService(environment, configuration, beans, converter, engines);
+        return new SpringMigrationService(configuration, beans, converter, engines);
     }
     private record Endpoint(DataSource dataSource, int capacity) { }
     private static Endpoint find(ConfigurableListableBeanFactory beans, Class<? extends Annotation> role) {
@@ -55,43 +55,45 @@ public class MigrationAutoConfiguration {
         return new Endpoint(dataSource, capacity);
     }
     public static final class SpringMigrationService implements MigrationService, AutoCloseable {
-        private final Environment environment;
         private final MigrationConfiguration configuration;
         private final ConfigurableListableBeanFactory beans;
         private final ValueConverter converter;
         private final ObjectProvider<MigrationEngine> engines;
-        private MigrationRunner runner;
+        private MigrationSession session;
+        private final AsyncMigration asynchronous;
         private boolean closed;
-        SpringMigrationService(Environment environment, MigrationConfiguration configuration,
+        SpringMigrationService(MigrationConfiguration configuration,
                 ConfigurableListableBeanFactory beans, ValueConverter converter, ObjectProvider<MigrationEngine> engines) {
-            this.environment=environment; this.configuration=configuration; this.beans=beans; this.converter=converter; this.engines=engines;
+            this.configuration=configuration; this.beans=beans; this.converter=converter; this.engines=engines;
+            asynchronous = new AsyncMigration(this::execute);
         }
-        public MigrationResult migrate() {
-            try (var invocation = MigrationLog.invocation()) { return migrateScoped(); }
-        }
-        private MigrationResult migrateScoped() {
-            synchronized (this) {
-                if (closed) throw new IllegalStateException("Migration service is closed");
-            }
-            configuration.get();
+        public MigrationExecution migrate() { return asynchronous.startSync(); }
+        public MigrationExecution migrateAsync() { return asynchronous.start(); }
+        private MigrationResult execute(MigrationMonitor monitor) {
+            var plan = configuration.get().toPlan();
+            MigrationLog.job(plan.jobId());
+            monitor.plan(plan);
             MigrationEngine custom = engines.getIfAvailable();
-            if (custom != null) return custom.execute(configuration.get().toPlan());
-            MigrationRunner current;
+            if (custom != null) return custom.execute(plan);
+            MigrationSession current;
             synchronized (this) {
                 if (closed) throw new IllegalStateException("Migration service is closed");
-                if (runner == null) {
-                    var source=find(beans, MigrationSource.class); var target=find(beans, MigrationTarget.class);
-                    runner=MigrationRunner.builder().source(source.dataSource(), source.capacity())
-                        .target(target.dataSource(), target.capacity()).environment(environment).converter(converter).build();
+                if (session == null) {
+                    var source = find(beans, MigrationSource.class);
+                    var target = find(beans, MigrationTarget.class);
+                    session = new MigrationSession(configuration,
+                            new DataSourceConnections(source.dataSource(), target.dataSource()),
+                            source.capacity(), target.capacity(), converter);
                 }
-                current=runner;
+                current = session;
             }
-            return current.migrate();
+            return current.execute(monitor);
         }
         public void close() {
-            MigrationRunner current;
-            synchronized (this) { closed=true; current=runner; }
+            MigrationSession current;
+            synchronized (this) { closed = true; current = session; }
             if (current != null) current.close();
+            asynchronous.close(current == null || !current.isWorkerThread());
         }
     }
 }

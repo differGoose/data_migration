@@ -1,5 +1,7 @@
 package com.datamigration.e2e;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.TableResult;
 import com.datamigration.api.MigrationRunner;
 import com.datamigration.support.ManualMigrationConsole;
@@ -58,7 +60,7 @@ class HostMigrationE2EIT {
                      .build()) {
 
             // Exactly the call a real host makes. Failure propagates and fails this test.
-            var result = migration.migrate();
+            var result = await(migration);
 
             assertThat(result.tables()).allSatisfy(table ->
                     assertThat(table.status()).isEqualTo(TableResult.Status.SUCCEEDED));
@@ -86,7 +88,7 @@ class HostMigrationE2EIT {
                  // Explicit host reconnection: discard sessions broken by the previous manual cut.
                  evictConnections(source);
                  evictConnections(target);
-                 migration.migrate();
+                 await(migration);
                  assertThat(sourceProxy.forwardedConnections()).as("Source traffic must pass through proxy").isPositive();
                  assertThat(targetProxy.forwardedConnections()).as("Target traffic must pass through proxy").isPositive();
              })) {

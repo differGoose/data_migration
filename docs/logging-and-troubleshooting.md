@@ -19,6 +19,7 @@
 
 | stage | 检查内容 |
 | --- | --- |
+| MIGRATION_REUSE | 同实例重复调用，返回运行中/已成功的原句柄；不会再次执行 |
 | CONFIG_LOAD / CONFIG_BIND | 配置资源是否可读、工作目录、classpath、YAML 缩进、未知字段和校验约束。未知字段日志只列属性路径；绑定错误不打印被拒绝的值 |
 | DATASOURCE_RESOLVE | 直接入口是否提供两端 DataSource；Spring 入口每端是否恰好有一个标记 Bean |
 | CAPACITY_CHECK | 声明给迁移使用的连接容量是否达到预算。有键表每端 W+1，无键表源1/目标2；多表同时运行需合计预算，详见配置文档 |
@@ -83,3 +84,5 @@ Runner 的配置加载不会初始化 Spring Boot 日志系统。`.run()` 前日
 [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java) 演示先迁移再启动宿主；在 IDE 用测试 classpath 运行其 main 即可观察顺序。[模拟真实宿主测试](manual-host-migration.md) 使用相同正式入口，真实数据库信息由使用者填写。
 
 宿主工厂创建 DataSource 若在调用 Runner 前就失败，组件尚未获得控制权，无法为这一步产生日志；应由宿主为其工厂添加安全的阶段提示。组件自身的所有级别均不输出驱动异常消息、堆栈、SQL、参数、业务行、键边界、JDBC URL、密码或 token；宿主、连接池和驱动的其他 logger 需由宿主另行管理。
+
+同步/异步入口的执行句柄、进度与异常通知方式见 [宿主执行入口](host-execution.md)。异步方法返回成功只表示取得句柄，不代表迁移已经成功；后台结果看 completion() 或 progress()。

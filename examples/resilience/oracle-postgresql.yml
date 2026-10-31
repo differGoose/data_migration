@@ -3,8 +3,9 @@
 resilience:
   environment: dev
   phase-timeout: 180s
-  # Host DataSource configuration classes can be loaded in parent and every worker JVM:
-  configuration-classes: []
+  # Supply lazy, annotated host DataSources in the parent and each worker JVM.
+  # Read resilience.source-proxy.port / resilience.target-proxy.port for the allocated routes.
+  configuration-classes: [your.project.MigrationDataSourcesConfiguration]
   source-proxy:
     upstream-host: ${DEV_ORACLE_HOST}
     upstream-port: ${DEV_ORACLE_PORT:1521}
@@ -41,19 +42,3 @@ data-migration:
         - { source-column: ID, target-jdbc-type: BIGINT }
         - { source-column: NAME, target-jdbc-type: VARCHAR }
         - { source-column: AMOUNT, target-jdbc-type: DECIMAL }
-
-# Test HOST configuration; the library does not bind this namespace.
-host-databases:
-  source:
-    # The harness substitutes its allocated loopback proxy port. For TCPS see the usage guide.
-    jdbc-url: jdbc:oracle:thin:@//127.0.0.1:${resilience.source-proxy.port}/${DEV_ORACLE_SERVICE}
-    username: ${DEV_ORACLE_USERNAME}
-    password: ${DEV_ORACLE_PASSWORD:}
-    connection-timeout: 10s
-  target:
-    # For verify-full: CONNECT_HOST must retain the certificate hostname but resolve to this relay.
-    # Upstream DEV_PG_HOST must independently reach the real server, not loop back into the proxy.
-    jdbc-url: jdbc:postgresql://${DEV_PG_CONNECT_HOST}:${resilience.target-proxy.port}/${DEV_PG_DATABASE}?sslmode=verify-full&sslrootcert=${DEV_PG_CA_FILE}&connectTimeout=10&socketTimeout=20&tcpKeepAlive=true
-    username: ${DEV_PG_USERNAME}
-    password: ${DEV_PG_PASSWORD:}
-    connection-timeout: 10s

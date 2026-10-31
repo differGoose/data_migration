@@ -8,13 +8,12 @@ import java.util.*;
 /** Local, independently stoppable servers. Never uses production JDBC credentials. */
 public final class TcpDatabases implements AutoCloseable {
     public final Path directory;
-    public final boolean tls;
     private Server source;
     private Server target;
     private int sourcePort;
     private int targetPort;
-    public TcpDatabases(Path directory, boolean tls) throws Exception {
-        this.directory = directory.toAbsolutePath(); this.tls = tls;
+    public TcpDatabases(Path directory) throws Exception {
+        this.directory = directory.toAbsolutePath();
         Files.createDirectories(this.directory);
         source = start(0); sourcePort = source.getPort();
         try { target = start(0); targetPort = target.getPort(); }
@@ -25,11 +24,10 @@ public final class TcpDatabases implements AutoCloseable {
     private Server start(int port) throws SQLException {
         List<String> args = new ArrayList<>(List.of("-tcpPort", Integer.toString(port),
                 "-baseDir", directory.toString(), "-ifNotExists"));
-        if (tls) args.add("-tcpSSL");
         return Server.createTcpServer(args.toArray(String[]::new)).start();
     }
-    public String sourceUrl() { return "jdbc:h2:" + (tls ? "ssl" : "tcp") + "://localhost:" + sourcePort + "/./source"; }
-    public String targetUrl() { return "jdbc:h2:" + (tls ? "ssl" : "tcp") + "://localhost:" + targetPort + "/./target"; }
+    public String sourceUrl() { return "jdbc:h2:tcp://localhost:" + sourcePort + "/./source"; }
+    public String targetUrl() { return "jdbc:h2:tcp://localhost:" + targetPort + "/./target"; }
     public void stopSource() { source.stop(); }
     public void stopTarget() { target.stop(); }
     public void restartSource() throws SQLException { source = start(sourcePort); }
@@ -56,13 +54,9 @@ public final class TcpDatabases implements AutoCloseable {
                 Map.entry("host-databases.source.jdbc-url", sourceUrl()),
                 Map.entry("host-databases.source.username", "sa"),
                 Map.entry("host-databases.source.password", ""),
-                Map.entry("host-databases.source.driver-class-name", "org.h2.Driver"),
-                Map.entry("host-databases.source.pool.maximum-pool-size", "6"),
                 Map.entry("host-databases.target.jdbc-url", targetUrl()),
                 Map.entry("host-databases.target.username", "sa"),
                 Map.entry("host-databases.target.password", ""),
-                Map.entry("host-databases.target.driver-class-name", "org.h2.Driver"),
-                Map.entry("host-databases.target.pool.maximum-pool-size", "6"),
                 Map.entry("spring.main.banner-mode", "off"),
                 Map.entry("spring.main.web-application-type", "none"));
     }

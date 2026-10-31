@@ -1,5 +1,7 @@
 package com.datamigration.demo;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
 import com.datamigration.support.TcpDatabases;
 import com.zaxxer.hikari.HikariDataSource;
@@ -14,15 +16,15 @@ public final class BeforeStartupDemo {
     @Configuration(proxyBeanMethods=false) @EnableAutoConfiguration
     public static class Application { }
     public static void main(String[] args) throws Exception {
-        try(var databases=new TcpDatabases(Path.of("target","before-startup-"+System.nanoTime()),false)) {
+        try(var databases=new TcpDatabases(Path.of("target","before-startup-"+System.nanoTime()))) {
             databases.seed(10_000);
             // Host-side factories; the library contains no pool or credentials configuration.
             try(var source=pool(databases.sourceUrl()); var target=pool(databases.targetUrl());
                 var migration=MigrationRunner.builder().source(source,6).target(target,6)
                     .configLocations("classpath:e2e.yml")
                     .arguments("--data-migration.job-id=before-startup-demo").build()) {
-                migration.migrate();
-                migration.migrate(); // Same job: verify successful tasks without inserting again.
+                await(migration);
+                await(migration); // Same job: verify successful tasks without inserting again.
             }
             // A migration exception propagates before this line. No host beans existed above.
             try(var application=new SpringApplicationBuilder(Application.class).web(WebApplicationType.NONE).run(args)) {

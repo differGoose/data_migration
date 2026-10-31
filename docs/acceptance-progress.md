@@ -1,6 +1,28 @@
 # 本地实施与验收记录
 
+TLS专项测试H2TlsIT、证书子进程及ECS专用示例已移除；下文对应名称和结果仅为历史证据，不代表当前功能。当前数据源和部署职责见 [宿主数据源边界](database-credentials.md)。
+
 以下早期记录为历史验收证据；连接配置和批量参数已进行破坏性改造，当前接入方式以 README 和 getting-started.md 为准。当前仅支持与验证 JDK 17；本文下方所有双版本、执行锁和指纹记录均为历史，不代表当前能力。
+
+## TLS专项设施与旧接入遗留清理（2026-11-01）
+
+删除H2TlsIT、不可信证书子进程、证书生成及SSL测试开关，H2测试设施统一为普通TCP。删除仓库内无实现/调用的旧公开接口AuditRepository、TableTaskExecutor、TableReader、BatchWriter和RowCursor；移除未读取的host-databases驱动/连接池配置及参数，清理22处无用/重复导入。
+
+保留examples/resilience/h2.yml作为唯一H2恢复配置，原classpath:resilience/h2.yml由Maven的examples测试资源映射继续提供。DEV恢复模板只引用宿主提供的数据源配置类，保留父进程代理端口、实际流量检查和独立JVM恢复。删除ECS专用入口和Dockerfile，认证、TLS、连接池和部署教程收敛为宿主责任说明。清理不修改宿主连接属性，保留驱动、有效扩展接口和此前未提交的同步/异步、防重复及进度改造。
+
+Amazon Corretto JDK17.0.16执行最终 `mvn -B -ntp clean verify` 通过：241项单元/组件测试；21项集成测试中18项执行通过，3项真实入口默认跳过。UT行覆盖1363/1379（98.84%），分支774/882（87.76%），原各85%门槛保留并通过。日志target-cleanup-verified17.log。通用HostMigration示例使用javac --release17编译通过；BeforeStartupDemo独立JDK17运行成功，完成迁移并复用成功句柄，日志target-cleanup-demo17.log。
+
+验证打包JAR不含上述五个旧接口、仍包含新执行/进度API；验证原classpath下H2配置与examples唯一来源字节一致。当前文档链接检查通过；历史TLS和ECS验收记录保留并明确标注设施已移除。未连接真实数据库、未提交或推送、未修改英文分支。
+
+## 同步/异步统一防重复与内存进度（2026-11-01）
+
+保留同步migrate()并新增migrateAsync()，统一返回MigrationExecution。同步首次调用等待完成并传播原异常；同实例正在运行或已成功时，两种入口交叉调用均返回同一句柄，执行中不等待、不报重复触发、不新建任务。失败清理完成后显式调用创建新句柄，保持原job/config按审计续跑。不同实例的引擎执行仍受JVM全局互斥保护，跨进程约定不变。
+
+通过progress()读取不可变的运行/表状态、总数和已确认提交/跳过数量，不轮询数据库、不改变连接预算。source计数前总数为空，无键表整表提交前不显示未提交数据为完成；数据完成和sequence收尾区分状态。completion()保留原MigrationResult和异常；派生Future取消不会终止迁移。close等待事务和工作线程清理，宿主DataSource所有权不变。进度统计只保存表级数据，提交核实用活动批次局部标志防重复累计，不累计保存所有批次ID。
+
+JDK17（Amazon Corretto17.0.16）最终 `mvn -B -ntp clean verify` 完整通过：241项单元/组件测试；22项集成测试中19项通过，3项真实数据库入口默认跳过。UT行覆盖1363/1379（98.84%），分支774/882（87.76%），原行/分支各85%门槛均通过。新增11项测试涵盖同步先启动、异步先启动、混合并发触发、Spring单例、不可变进度、成功缓存、失败恢复与新Runner续跑、无键整表事务、sequence失败、中断/关闭、提交核实及归还连接失败后不重复累计。日志target-async-verified17.log。
+
+HostMigration和ECS示例均使用javac --release17编译通过；BeforeStartupDemo在独立JDK17进程运行成功，日志target-async-startup17.log。原父进程代理/独立JVM故障场景通过；未连接真实Oracle/PostgreSQL。公开方法返回类型与宿主示例详见 [宿主执行入口](host-execution.md)。本轮在main实施，未提交或推送，英文分支未修改。
 
 ## 关键节点日志与安全失败定位（2026-10-30）
 

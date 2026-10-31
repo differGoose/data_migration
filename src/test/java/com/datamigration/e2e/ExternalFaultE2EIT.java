@@ -54,7 +54,7 @@ class ExternalFaultE2EIT {
     }
     @ParameterizedTest @EnumSource(value=E2ESettings.Scenario.class,names={"MIGRATION"},mode=EnumSource.Mode.EXCLUDE)
     void externalConfigurationUsesRunnerAndPreservesJobAcrossFaultAndRepeat(E2ESettings.Scenario scenario) throws Exception {
-        try(var db=new TcpDatabases(directory.resolve("caller-db"),false)) {
+        try(var db=new TcpDatabases(directory.resolve("caller-db"))) {
             db.seed(10_000);
             Path yaml=config(db,scenario,false);
             Path output=DatabaseE2E.runConfigured(yaml.toUri().toString());
@@ -67,7 +67,7 @@ class ExternalFaultE2EIT {
         }
     }
     @Test void keylessExplicitReimportCanRecoverBeforeCommitOnNonemptyTarget() throws Exception {
-        try(var db=new TcpDatabases(directory.resolve("caller-db"),false)) {
+        try(var db=new TcpDatabases(directory.resolve("caller-db"))) {
             db.seed(10_000);
             DatabaseFixture.execute(db.targetUrl(),"INSERT INTO CUSTOMER VALUES(99999,'old',1)");
             Path output=DatabaseE2E.runConfigured(config(db,E2ESettings.Scenario.APP_BEFORE_COMMIT,true).toUri().toString());

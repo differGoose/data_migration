@@ -1,5 +1,7 @@
 package com.datamigration.e2e;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.MigrationRunner;
 import com.datamigration.conversion.JdbcValueConverter;
 import com.datamigration.support.*;
@@ -22,7 +24,7 @@ class ManualHostRecoveryIT {
 
     @ParameterizedTest @ValueSource(strings = {"source", "target"})
     void manualCutFailsAndExplicitRunResumesWithTheSameRunner(String side) throws Exception {
-        try (var db = new TcpDatabases(directory, false)) {
+        try (var db = new TcpDatabases(directory)) {
             db.seed(2000);
             int sourcePort = URI.create(db.sourceUrl().substring("jdbc:h2:".length())).getPort();
             int targetPort = URI.create(db.targetUrl().substring("jdbc:h2:".length())).getPort();
@@ -46,7 +48,7 @@ class ManualHostRecoveryIT {
                  var console = new ManualMigrationConsole(sourceProxy, targetProxy, () -> {
                      if (source.getHikariPoolMXBean() != null) source.getHikariPoolMXBean().softEvictConnections();
                      if (target.getHikariPoolMXBean() != null) target.getHikariPoolMXBean().softEvictConnections();
-                     migration.migrate();
+                     await(migration);
                  })) {
                 try {
                     post(console, "run");

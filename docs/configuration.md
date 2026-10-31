@@ -38,7 +38,7 @@ target-table 必须与 INSERT 的实际目标一致；只支持普通 table 或 
 
 ## 并发和连接容量
 
-JVM 共享单许可只允许一次 migrate，重叠调用立即失败；该限制覆盖不同 Runner 和 Spring Context，不影响一次调用内部的并发。不同进程须由部署方保证不重叠。
+同实例的同步/异步调用共用防重复状态，运行中返回同一执行句柄及进度；JVM 共享单许可阻止不同 Runner 和 Spring Context 的重叠执行，不影响一次执行内部的并发。不同进程须由部署方保证不重叠。
 
 max-concurrent-tables 控制表并发，worker-count 控制单表块并发：
 

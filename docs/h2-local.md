@@ -27,7 +27,6 @@ SELECT ID, OCTET_LENGTH(CONTENT) FROM DOCUMENTS ORDER BY ID;
 
 ```sh
 mvn -B -ntp verify "-Dit.test=H2MigrationIT"
-mvn -B -ntp verify "-Dit.test=H2TlsIT"
 ```
 
-测试自行管理数据库及宿主 DataSource，不需要先开 H2Demo。TLS测试临时生成证书；H2结果不代替真实Oracle/PostgreSQL联调。
+测试自行管理普通 TCP 数据库及宿主 DataSource，不需要先开 H2Demo。H2结果不代替真实Oracle/PostgreSQL联调。

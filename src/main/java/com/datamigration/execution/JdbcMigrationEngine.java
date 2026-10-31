@@ -26,6 +26,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     private final ThreadLocal<Boolean> engineWorker = ThreadLocal.withInitial(() -> false);
     private Thread caller;
     private volatile boolean closed;
+    private MigrationObserver observer = MigrationObserver.NONE;
 
     public JdbcMigrationEngine(ConnectionAccess connections, int sourceCapacity, int targetCapacity,
                                ValueConverter converter) {
@@ -34,19 +35,20 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         this.rows = new JdbcRows(converter);
     }
 
-    @Override public MigrationResult execute(MigrationPlan plan) {
+    @Override public MigrationResult execute(MigrationPlan plan) { return execute(plan, MigrationObserver.NONE); }
+    public MigrationResult execute(MigrationPlan plan, MigrationObserver observer) {
         try (var invocation = MigrationLog.invocation()) {
             MigrationLog.job(plan.jobId());
             MigrationLog.stage("MIGRATION_START", "-", "data-migration");
             MigrationLog.info("Migration execution started", "tables=" + plan.tables().size());
-            try { return executeScoped(plan); }
+            try { return executeScoped(plan, observer); }
             catch (RuntimeException failure) {
                 if (!(failure instanceof MigrationException)) MigrationLog.error("Migration execution failed", failure);
                 throw failure;
             }
         }
     }
-    private MigrationResult executeScoped(MigrationPlan plan) {
+    private MigrationResult executeScoped(MigrationPlan plan, MigrationObserver observer) {
         synchronized (lifecycle) {
             if (closed) throw new IllegalStateException("Migration engine is closed");
             if (!running.compareAndSet(false, true)) throw new IllegalStateException("A migration is already running");
@@ -55,6 +57,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                 throw new IllegalStateException("A migration is already running in this JVM");
             }
             caller = Thread.currentThread();
+            this.observer = observer;
         }
         Instant start = Instant.now();
         try {
@@ -99,7 +102,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
             return result;
         } finally {
             synchronized (lifecycle) {
-                running.set(false); caller = null; EXECUTION.release(); lifecycle.notifyAll();
+                running.set(false); caller = null; this.observer = MigrationObserver.NONE; EXECUTION.release(); lifecycle.notifyAll();
             }
         }
     }
@@ -136,6 +139,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     }
     private TableResult tableScoped(MigrationPlan plan, TableTask task) {
         Instant start = Instant.now();
+        observer.tableStarted(task.name());
         CheckpointStore store = new CheckpointStore(plan.strategy().auditTableName(), plan.jobId(), task.name());
         boolean finalizedData = false;
         boolean checkpointValidated = false;
@@ -152,6 +156,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                 MigrationLog.stage("CHECKPOINT_READ", "target", "data-migration.strategy.audit.table-name");
                 Checkpoint summary = store.find(control, 0, false);
                 checkpointValidated = true;
+                observer.restored(task.name(), summary);
                 if (summary != null && summary.succeeded()) {
                     MigrationLog.info("Table already succeeded; reusing audited result", "");
                     return result(task, start, summary, TableResult.Status.SUCCEEDED, null);
@@ -170,6 +175,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                     MigrationLog.stage("SOURCE_COUNT", "source", "select-sql");
                     MigrationLog.info("Counting source rows", "");
                     long total = count(source, query);
+                    observer.counted(task.name(), total);
                     MigrationLog.info("Source row count checked", "rows=" + total);
                     // Keep preparation and optional DELETE in the summary transaction.
                     summary = store.find(control, 0, true);
@@ -207,6 +213,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                     finalizedData = true;
                     MigrationLog.info("Table data committed", "");
                 }
+                observer.finalizing(task.name());
                 MigrationLog.stage("SEQUENCE_FINALIZE", "target", "sequence");
                 store.find(control, 0, true);
                 MigrationLog.info("Sequence finalization started", "enabled=" + task.sequence().enabled());
@@ -245,8 +252,10 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                     + (checkpoint == null ? 0 : checkpoint.committed()) + " skippedRows=" + (checkpoint == null ? 0 : checkpoint.skipped())
                     + " elapsedMs=" + java.time.Duration.between(start, Instant.now()).toMillis());
         }
-        return new TableResult(task.name(), start, Instant.now(), checkpoint == null ? 0 : checkpoint.committed(),
+        var result = new TableResult(task.name(), start, Instant.now(), checkpoint == null ? 0 : checkpoint.committed(),
                 checkpoint == null ? 0 : checkpoint.skipped(), checkpoint == null ? 0 : checkpoint.retries(), status, error);
+        observer.finished(result);
+        return result;
     }
 
     private List<String> preflight(Connection source, Connection target, String query, TableTask task) throws SQLException {
@@ -378,6 +387,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         MigrationStrategy strategy = plan.strategy();
         int retries = 0;
         boolean isolate = false;
+        boolean progressReported = false;
         while (true) {
             MigrationLog.resetFailure();
             MigrationLog.stage("BATCH_READ", "source", "select-sql");
@@ -414,6 +424,8 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                     committedCall = true;
                     MigrationLog.stage("BATCH_COMMIT", "target", "-");
                     target.commit();
+                    observer.committed(task.name(), batch.batch(), counts.written(), counts.skipped());
+                    progressReported = true;
                     MigrationLog.debug("Batch committed", "committedRows=" + counts.written() + " skippedRows=" + counts.skipped());
                     return;
                 } catch (Exception exception) {
@@ -434,7 +446,9 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                         Checkpoint current = store.find(verify, batch.batch(), true);
                         boolean success = current.succeeded();
                         verify.rollback();
-                        if (success) { MigrationLog.info("Batch commit verified", ""); return; }
+                        if (success) {
+                            if (!progressReported) observer.committed(task.name(), batch.batch(), current.committed(), current.skipped());
+                            MigrationLog.info("Batch commit verified", ""); return; }
                         rolledBack = true;
                     } catch (Exception unresolved) {
                         MigrationLog.resetFailure(); MigrationLog.remember(unresolved);
@@ -508,6 +522,8 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     private void checkRunning() throws SQLException {
         if (closed || Thread.currentThread().isInterrupted()) throw new SQLException("Migration stopped", "57014");
     }
+
+    public boolean isWorkerThread() { return engineWorker.get(); }
 
     @Override public void close() {
         boolean interrupted = false;

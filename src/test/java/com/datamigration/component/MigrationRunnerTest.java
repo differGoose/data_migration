@@ -1,5 +1,7 @@
 package com.datamigration.component;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
 import com.datamigration.support.*;
 import org.junit.jupiter.api.*;
@@ -54,12 +56,12 @@ class MigrationRunnerTest {
             db.target("ALTER TABLE A ADD CONSTRAINT bad CHECK(ID<>20)");
             Path yaml=configuration();
             try(var migration=runner(db,yaml).build()) {
-                assertThatThrownBy(migration::migrate).isInstanceOf(MigrationException.class);
+                assertThatThrownBy(() -> await(migration)).isInstanceOf(MigrationException.class);
                 assertThat(db.scalar("SELECT COUNT(*) FROM B")).isEqualTo(25);
                 db.target("ALTER TABLE A DROP CONSTRAINT bad");
-                migration.migrate(); migration.migrate();
+                await(migration); await(migration);
             }
-            try(var restarted=runner(db,yaml).build()) { restarted.migrate(); }
+            try(var restarted=runner(db,yaml).build()) { await(restarted); }
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(40);
             assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE job_id='startup' AND task_name='A' AND batch_no>0")).isEqualTo(3);
             assertThat(db.scalar("SELECT MAX(expected_rows) FROM migration_audit WHERE job_id='startup' AND task_name='A' AND batch_no>0")).isEqualTo(17);
@@ -74,9 +76,9 @@ class MigrationRunnerTest {
             Files.writeString(override,"data-migration:\n  job-id: from-file\n");
             try(var migration=runner(db,yaml).configLocations(yaml.toUri().toString(),override.toUri().toString())
                     .arguments("--data-migration.job-id=from-argument").build()) {
-                migration.migrate();
+                await(migration);
                 Files.writeString(yaml,"data-migration:\n  invalid: true\n");
-                migration.migrate();
+                await(migration);
             }
             assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE job_id='from-argument' AND batch_no=0")).isEqualTo(2);
         }
@@ -87,7 +89,7 @@ class MigrationRunnerTest {
             AtomicBoolean started=new AtomicBoolean();
             db.target("ALTER TABLE A ADD CONSTRAINT bad CHECK(ID<>1)");
             assertThatThrownBy(() -> {
-                try(var migration=runner(db,yaml).build()) { migration.migrate(); }
+                try(var migration=runner(db,yaml).build()) { await(migration); }
                 started.set(true);
             }).isInstanceOf(MigrationException.class);
             assertThat(started).isFalse();
@@ -95,7 +97,7 @@ class MigrationRunnerTest {
             try(var migration=runner(db,yaml).converter((value,type) -> {
                 assertThat(started).isFalse();
                 return new com.datamigration.conversion.JdbcValueConverter().convert(value,type);
-            }).build()) { migration.migrate(); }
+            }).build()) { await(migration); }
             started.set(true);
             assertThat(started).isTrue();
         }
@@ -115,18 +117,18 @@ class MigrationRunnerTest {
                     return value;
                 }).build();
             try {
-                var future=executor.submit(runner::migrate);
+                var future=executor.submit(() -> await(runner));
                 assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
-                assertThatThrownBy(runner::migrate).hasMessageContaining("already running");
+                assertThat(runner.migrate().progress().status()).isEqualTo(MigrationProgress.Status.RUNNING);
                 try (var second=runner(db,configuration()).build()) {
-                    assertThatThrownBy(second::migrate).hasMessageContaining("already running");
+                    assertThatThrownBy(() -> await(second)).hasMessageContaining("already running");
                 }
                 try (var third=runner(db,configuration()).build()) {
-                    assertThatThrownBy(third::migrate).hasMessageContaining("already running");
+                    assertThatThrownBy(() -> await(third)).hasMessageContaining("already running");
                 }
                 runner.close();
                 assertThatThrownBy(() -> future.get(10,TimeUnit.SECONDS)).isInstanceOf(ExecutionException.class);
-                assertThatThrownBy(runner::migrate).hasMessageContaining("closed");
+                assertThatThrownBy(() -> await(runner)).hasMessageContaining("closed");
                 try(var c=target.getConnection()) { assertThat(c.isValid(1)).isTrue(); }
             } finally { runner.close(); executor.shutdownNow(); }
         }
@@ -137,7 +139,7 @@ class MigrationRunnerTest {
         assertThatThrownBy(() -> MigrationRunner.builder().source(ds,0).target(ds,1).environment(new MockEnvironment()).build()).hasMessageContaining("positive");
         assertThatThrownBy(() -> MigrationRunner.builder().source(ds,1).target(ds,1).environment(new MockEnvironment()).configLocations("x").build()).hasMessageContaining("either");
         try(var runner=MigrationRunner.builder().source(ds,1).target(ds,1).configLocations(configuration().toUri().toString()).build()) {
-            assertThatThrownBy(runner::migrate).hasMessageContaining("Insufficient pool capacity");
+            assertThatThrownBy(() -> await(runner)).hasMessageContaining("Insufficient pool capacity");
         }
         verifyNoInteractions(ds);
     }
@@ -145,8 +147,8 @@ class MigrationRunnerTest {
         var ds=mock(javax.sql.DataSource.class);
         when(ds.getConnection()).thenThrow(new SQLException("private-password"));
         try(var runner=MigrationRunner.builder().source(ds,4).target(ds,4).configLocations(configuration().toUri().toString()).build()) {
-            assertThatThrownBy(runner::migrate).isInstanceOf(MigrationException.class).hasMessageNotContaining("private-password");
-            assertThatThrownBy(runner::migrate).isInstanceOf(MigrationException.class);
+            assertThatThrownBy(() -> await(runner)).isInstanceOf(MigrationException.class).hasMessageNotContaining("private-password");
+            assertThatThrownBy(() -> await(runner)).isInstanceOf(MigrationException.class);
         }
     }
 }

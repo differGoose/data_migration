@@ -1,22 +1,14 @@
 package com.datamigration.resilience;
 
-import com.datamigration.api.MigrationService;
-import com.datamigration.jdbc.DataSourceConnections;
-import com.datamigration.conversion.JdbcValueConverter;
-import com.datamigration.execution.JdbcMigrationEngine;
-import com.datamigration.jdbc.ConnectionAccess;
-import com.datamigration.properties.MigrationConfiguration;
 import com.datamigration.support.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.boot.builder.SpringApplicationBuilder;
 import java.lang.reflect.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.sql.*;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.*;
 
 class H2ProcessRecoveryIT {
@@ -25,7 +17,7 @@ class H2ProcessRecoveryIT {
     @ParameterizedTest
     @ValueSource(strings={"before","after"})
     void newJvmRecoversFromAbruptExitAtCommitBoundary(String crash) throws Exception {
-        try (var databases=new TcpDatabases(directory.resolve("db"),false)) {
+        try (var databases=new TcpDatabases(directory.resolve("db"))) {
             databases.seed(10_000);
             assertThat(run(databases,crash)).isEqualTo(73);
             try (var connection=DatabaseFixture.connection(databases.targetUrl());
@@ -49,10 +41,8 @@ class H2ProcessRecoveryIT {
                 "--spring.main.banner-mode=off","--data-migration.job-id=e2e",
                 "--host-databases.source.jdbc-url="+databases.sourceUrl(),
                 "--host-databases.source.username=sa","--host-databases.source.password=",
-                "--host-databases.source.driver-class-name=org.h2.Driver",
                 "--host-databases.target.jdbc-url="+databases.targetUrl(),
-                "--host-databases.target.username=sa","--host-databases.target.password=",
-                "--host-databases.target.driver-class-name=org.h2.Driver")
+                "--host-databases.target.username=sa","--host-databases.target.password=")
                 .redirectErrorStream(true).redirectOutput(output.toFile()).start();
         try {
             assertThat(process.waitFor(45,TimeUnit.SECONDS)).withFailMessage("Child process timed out: "+output).isTrue();

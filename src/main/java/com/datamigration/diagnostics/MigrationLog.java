@@ -51,7 +51,9 @@ public final class MigrationLog {
     private MigrationLog() { }
 
     private static final class Trace {
-        final UUID id = UUID.randomUUID();
+        final UUID id;
+        Trace() { this(UUID.randomUUID()); }
+        Trace(UUID id) { this.id = id; }
         final Set<String> connected = ConcurrentHashMap.newKeySet();
         final Map<String, String> paths = new ConcurrentHashMap<>();
     }
@@ -81,6 +83,7 @@ public final class MigrationLog {
         var frame = CURRENT.get();
         return frame == null ? new Frame(new Trace(), new FailureHolder()) : frame;
     }
+    public static Scope invocation(UUID id) { return new Scope(new Frame(new Trace(id), new FailureHolder())); }
     public static Scope invocation() { return new Scope(frame().copy(false)); }
     public static Scope phase(String stage, String endpoint, String property) {
         var scope = new Scope(frame().copy(false)); stage(stage, endpoint, property); return scope;

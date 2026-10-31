@@ -82,7 +82,7 @@ public final class HostDataSources {
 }
 ```
 
-这六个环境变量由宿主运行环境提供。密码需要解密时，在这个工厂里解密；IAM 应通过宿主支持动态 token 的 DataSource 获取新连接，不应把一次生成的 token 永久当作池密码。详见 [数据源与凭据](database-credentials.md)。
+以上只是宿主创建数据源的最小示例；可以直接使用你们已有的 DataSource。认证、TLS、连接池和超时均由宿主管理，组件不接管，详见 [数据源边界](database-credentials.md)。
 
 ## 4. 在 main 里先迁移，再启动
 
@@ -152,12 +152,12 @@ spring:
 
 ## 6. 再次调用和重启
 
-同一个 Runner 重复 migrate，或重启后以同配置新建 Runner：成功表跳过，失败表恢复未完成块，序列收尾失败只重试收尾。保持 job-id、任务 name、实际数据源及全部迁移配置不变，不需要修改 YAML 来表示“我要恢复”。
+同一个 Runner 成功后返回原句柄；重启后以同配置新建 Runner，成功表从审计跳过。失败表恢复未完成块，序列收尾失败只重试收尾。保持 job-id、任务 name、实际数据源及全部迁移配置不变，不需要修改 YAML 来表示“我要恢复”。
 
 配置首次绑定成功后缓存，不热更新。源库后来新增数据，也不会因为重复调用就自动同步。同 job 恢复不支持修改 batch-size 等迁移规则，组件不计算配置摘要来检测变化。
 
-方法同步返回 MigrationResult；有表失败时抛 MigrationException，通过 result().tables() 查看各表 committedRows、skippedRows、status 与脱敏错误。配置或数据源初始化错误可能抛其他运行时异常，也应阻止宿主启动。完整处理见 [运维指南](operations.md)。
+migrate() 和 migrateAsync() 统一返回 MigrationExecution。同步首次调用等待完成并直接传播异常；异步通过 completion() 通知结果或异常。运行中交叉重复调用立即返回同一句柄，通过 progress() 读取进度，不再报重复触发错误。成功后返回缓存句柄，失败后显式调用按审计恢复。完整调用和返回类型迁移见 [宿主执行入口](host-execution.md)，故障处理见 [运维指南](operations.md)。
 
 可运行实例位于 [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java)，使用独立 H2 合成数据，无需真实账号。
 
-同一 JVM 仅允许一次迁移执行，不同 Runner / Spring Context 的重叠调用立即失败；单次执行内部仍可多表、批次并发。部署方保证任意时刻只有一个迁移进程。仅支持和验证 JDK 17。审计结构与恢复边界见 [审计设计](audit.md)。
+同实例重复触发会合并；同一 JVM 仅允许一次迁移执行，不同 Runner / Spring Context 的重叠执行仍会失败；单次执行内部仍可多表、批次并发。部署方保证任意时刻只有一个迁移进程。仅支持和验证 JDK 17。审计结构与恢复边界见 [审计设计](audit.md)。

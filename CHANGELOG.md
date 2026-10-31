@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- 删除H2 TLS专项测试、证书子进程及SSL测试开关；测试统一使用普通TCP。移除未接入实际流程的旧公开接口AuditRepository、TableTaskExecutor、TableReader、BatchWriter、RowCursor。
+- 清理未读取的测试驱动/池配置和重复H2恢复资源；DEV恢复模板改为宿主提供数据源配置类。认证、TLS、连接池和部署教程收敛为职责说明，删除ECS专用入口和Dockerfile，保留通用宿主封装。
+
+- 同步 migrate() 与新增 migrateAsync() 共用执行状态，运行中和成功后重复调用返回同一 MigrationExecution；通过 progress() 读取不可变已提交进度，通过 completion() 接收原 MigrationResult/异常。同步首次调用仍等待完成并传播异常；失败后显式重试，关闭等待清理，不关闭宿主 DataSource。返回类型由 MigrationResult 调整为 MigrationExecution。
+
 - 增加配置、数据源、容量、表预检、数据提交及 sequence 收尾关键日志；批次细节 DEBUG、有限重试 WARN、最终失败 ERROR。跨线程关联 runId/任务/批次，保留首个安全失败阶段与 SQLState/厂商码，不输出驱动消息、SQL 或业务数据。MigrationException 消息列出失败任务及安全摘要；新增启动前日志与排错指南。
 
 - 模拟宿主真实迁移测试增加可选手动代理模式，通过本机控制页分别切断/恢复源和目标，并用原配置、原job显式续跑；不要求e2e配置段。
@@ -20,7 +25,7 @@
 - 三项全局行数参数统一为每表 batch-size，默认1000，控制有键表事务块、JDBC batch和fetch提示；无键表保留整表事务。
 - 连接借用/归还时设置并恢复事务属性，归还前回滚未完成事务；借连接错误脱敏保留SQLState和厂商码以支持有限重试。
 - 改造 H2/DEV 恢复测试，保留精确提交边界、独立宿主JVM、TCP代理和脱敏执行清单；DEV由测试宿主提供DataSource。
-- 重写宿主接入、配置、解密/IAM、ECS及H2文档，提供可运行启动前示例。仅验证JDK17及行/分支各85%门槛。
+- 重写宿主接入、配置及H2文档，提供可运行启动前示例。仅验证JDK17及行/分支各85%门槛。
 
 ## 0.1.0-SNAPSHOT — 2026-10-28
 

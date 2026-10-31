@@ -21,9 +21,8 @@
 | [component/TransactionRecoveryTest.java](../src/test/java/com/datamigration/component/TransactionRecoveryTest.java) | `com.datamigration.component` | 组件契约。 |
 | [demo/BeforeStartupDemo.java](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java) | `com.datamigration.demo` | 可直接运行的 H2 启动前迁移示例。 |
 | [demo/H2Demo.java](../src/test/java/com/datamigration/demo/H2Demo.java) | `com.datamigration.demo` | 手动入口，不参与测试发现。 |
-| [e2e/H2MigrationIT.java](../src/test/java/com/datamigration/e2e/H2MigrationIT.java) | `com.datamigration.e2e` | 完整迁移、类型和TLS。 |
-| [e2e/H2ScenariosIT.java](../src/test/java/com/datamigration/e2e/H2ScenariosIT.java) | `com.datamigration.e2e` | 完整迁移、类型和TLS。 |
-| [e2e/H2TlsIT.java](../src/test/java/com/datamigration/e2e/H2TlsIT.java) | `com.datamigration.e2e` | 完整迁移、类型和TLS。 |
+| [e2e/H2MigrationIT.java](../src/test/java/com/datamigration/e2e/H2MigrationIT.java) | `com.datamigration.e2e` | 完整迁移与类型。 |
+| [e2e/H2ScenariosIT.java](../src/test/java/com/datamigration/e2e/H2ScenariosIT.java) | `com.datamigration.e2e` | 完整迁移与类型。 |
 | [resilience/ConfiguredResilienceIT.java](../src/test/java/com/datamigration/resilience/ConfiguredResilienceIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
 | [resilience/DevHarnessContractIT.java](../src/test/java/com/datamigration/resilience/DevHarnessContractIT.java) | `com.datamigration.resilience` | 用人工预备H2验证DEV宿主DataSource扩展，不代表真实数据库验收。 |
 | [resilience/H2ProcessRecoveryIT.java](../src/test/java/com/datamigration/resilience/H2ProcessRecoveryIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
@@ -41,7 +40,6 @@
 | [support/RowDigest.java](../src/test/java/com/datamigration/support/RowDigest.java) | `com.datamigration.support` | 数据库、宿主、代理、控制和数据校验设施。 |
 | [support/TcpDatabases.java](../src/test/java/com/datamigration/support/TcpDatabases.java) | `com.datamigration.support` | 数据库、宿主、代理、控制和数据校验设施。 |
 | [support/TcpFaultProxy.java](../src/test/java/com/datamigration/support/TcpFaultProxy.java) | `com.datamigration.support` | 数据库、宿主、代理、控制和数据校验设施。 |
-| [support/UntrustedTlsClient.java](../src/test/java/com/datamigration/support/UntrustedTlsClient.java) | `com.datamigration.support` | 数据库、宿主、代理、控制和数据校验设施。 |
 | [unit/JdbcValueConverterTest.java](../src/test/java/com/datamigration/unit/JdbcValueConverterTest.java) | `com.datamigration.unit` | 独立逻辑。 |
 | [unit/KeyCodecTest.java](../src/test/java/com/datamigration/unit/KeyCodecTest.java) | `com.datamigration.unit` | 独立逻辑。 |
 | [unit/SqlErrorsTest.java](../src/test/java/com/datamigration/unit/SqlErrorsTest.java) | `com.datamigration.unit` | 独立逻辑。 |
@@ -64,3 +62,6 @@
 - [e2e/ManualHostRecoveryIT.java](../src/test/java/com/datamigration/e2e/ManualHostRecoveryIT.java)：合成数据库验证源/目标实际TCP断连、同Runner恢复和重复执行。
 
 - [component/MigrationLoggingTest.java](../src/test/java/com/datamigration/component/MigrationLoggingTest.java)：捕获 INFO/DEBUG/WARN/ERROR，验证配置与端点定位、并发批次归属、提交未知及二次审计失败保留原始原因、sequence 失败和秘密不泄漏。
+
+- [component/AsyncMigrationTest.java](../src/test/java/com/datamigration/component/AsyncMigrationTest.java)：同步/异步交叉触发合并、已提交进度、失败恢复、重启、Spring单例、提交核实、sequence收尾、无键整表事务、中断及关闭清理。
+- [support/MigrationAwait.java](../src/test/java/com/datamigration/support/MigrationAwait.java)：测试/命令行边界等待执行句柄并保留原异常类型，不改变正式接口的异步能力。

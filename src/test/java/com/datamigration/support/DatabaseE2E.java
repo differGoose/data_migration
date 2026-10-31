@@ -1,5 +1,7 @@
 package com.datamigration.support;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
 import com.datamigration.conversion.JdbcValueConverter;
 import com.datamigration.jdbc.DataSourceConnections;
@@ -34,9 +36,9 @@ public final class DatabaseE2E {
             Future<Report> future=worker.submit(() -> {
                 int timeout=seconds(settings.phaseTimeout());
                 var baseline=E2EValidation.source(connections,plan,converter,settings.validation(),timeout);
-                var first=runner.migrate();
+                var first=await(runner);
                 var validated=E2EValidation.complete(connections,plan,converter,settings.validation(),timeout,baseline);
-                var repeated=runner.migrate();
+                var repeated=await(runner);
                 var second=E2EValidation.complete(connections,plan,converter,settings.validation(),timeout,baseline);
                 E2EValidation.require(second.equals(validated),"Repeated migration changed data or audit totals/batches");
                 return new Report(output,first,repeated,second);

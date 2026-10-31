@@ -26,7 +26,7 @@ class DevHarnessContractIT {
         }
     }
     @Test void externalDataSourcesSupportRepeatedCallsWithoutFixtureMutation() throws Exception {
-        try (var databases = new TcpDatabases(directory.resolve("prepared"), false)) {
+        try (var databases = new TcpDatabases(directory.resolve("prepared"))) {
             databases.seed(10000); // Explicit preparation by the caller, outside the suite.
             Path config = directory.resolve("dev.properties");
             var properties = new Properties();

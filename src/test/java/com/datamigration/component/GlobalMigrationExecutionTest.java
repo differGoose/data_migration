@@ -1,5 +1,7 @@
 package com.datamigration.component;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
 import com.datamigration.autoconfigure.MigrationAutoConfiguration;
 import com.datamigration.conversion.JdbcValueConverter;
@@ -70,8 +72,8 @@ class GlobalMigrationExecutionTest {
                     try {
                         assertThat(entered.await(5,TimeUnit.SECONDS)).isTrue();
                         context(db).run(one -> context(db).run(two -> {
-                            assertThatThrownBy(() -> one.getBean(MigrationService.class).migrate()).hasMessageContaining("already running");
-                            assertThatThrownBy(() -> two.getBean(MigrationService.class).migrate()).hasMessageContaining("already running");
+                            assertThatThrownBy(() -> await(one.getBean(MigrationService.class))).hasMessageContaining("already running");
+                            assertThatThrownBy(() -> await(two.getBean(MigrationService.class))).hasMessageContaining("already running");
                         }));
                         active.close(); // An unused Runner cannot release another owner's permit.
                         first.cancel(true);
@@ -82,7 +84,7 @@ class GlobalMigrationExecutionTest {
                     } finally { release.countDown(); }
                 }
             }
-            context(db).run(c -> assertThat(c.getBean(MigrationService.class).migrate().tables().get(0).committedRows()).isEqualTo(10));
+            context(db).run(c -> assertThat(await(c.getBean(MigrationService.class)).tables().get(0).committedRows()).isEqualTo(10));
         }
     }
     private com.zaxxer.hikari.HikariDataSource pool(String url,int capacity) {
