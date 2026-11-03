@@ -20,7 +20,7 @@ public final class BeforeStartupDemo {
             databases.seed(10_000);
             // Host-side factories; the library contains no pool or credentials configuration.
             try(var source=pool(databases.sourceUrl()); var target=pool(databases.targetUrl());
-                var migration=MigrationRunner.builder().source(source,6).target(target,6)
+                var migration=MigrationRunner.builder().source(source).target(target)
                     .configLocations("classpath:e2e.yml")
                     .arguments("--data-migration.job-id=before-startup-demo").build()) {
                 await(migration);

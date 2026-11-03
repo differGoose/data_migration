@@ -22,7 +22,7 @@ mvn -B -ntp verify "-Dit.test=ConfiguredResilienceIT" "-Dresilience.config=file:
 
 ## DEV 数据源与代理端口
 
-[DEV模板](../examples/resilience/oracle-postgresql.yml)仅包含场景、代理路由、验证查询及迁移规则。将 resilience.configuration-classes 改为宿主提供的配置类全名；它在父进程和每个独立子进程中加载，源、目标 Bean 分别标记 @MigrationSource / @MigrationTarget，并声明迁移连接容量。
+[DEV模板](../examples/resilience/oracle-postgresql.yml)仅包含场景、代理路由、验证查询及迁移规则。将 resilience.configuration-classes 改为宿主提供的配置类全名；它在父进程和每个独立子进程中加载，源、目标 Bean 分别标记 @MigrationSource / @MigrationTarget，默认自动检查HikariCP池上限；不支持的自定义数据源可显式声明迁移连接容量。
 
 源、目标 DataSource Bean 使用 @Lazy，避免预读配置时创建连接。创建数据源时，从 Spring Environment 读取 resilience.source-proxy.port 和 resilience.target-proxy.port，将连接路由到父进程分配的本机代理。两端 upstream-host/upstream-port 仍指向实际数据库。配置类及宿主所需资源必须在测试与子进程 classpath 可用，参考 [外部配置类示例](../examples/e2e/ExternalDataSourcesConfiguration.java)。
 

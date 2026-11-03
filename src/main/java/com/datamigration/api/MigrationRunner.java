@@ -4,7 +4,6 @@ import com.datamigration.conversion.*;
 import com.datamigration.diagnostics.MigrationLog;
 import com.datamigration.execution.AsyncMigration;
 import com.datamigration.execution.MigrationSession;
-import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.properties.MigrationConfiguration;
 import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
 import org.springframework.core.env.*;
@@ -19,7 +18,7 @@ public final class MigrationRunner implements MigrationService, AutoCloseable {
 
     private MigrationRunner(Builder builder, Environment environment) {
         session = new MigrationSession(new MigrationConfiguration(environment),
-                new DataSourceConnections(builder.source, builder.target), builder.sourceCapacity,
+                builder.source, builder.sourceCapacity, builder.target,
                 builder.targetCapacity, Objects.requireNonNull(builder.converter));
         asynchronous = new AsyncMigration(session::execute);
     }
@@ -33,11 +32,13 @@ public final class MigrationRunner implements MigrationService, AutoCloseable {
 
     public static final class Builder {
         private DataSource source, target;
-        private int sourceCapacity, targetCapacity;
+        private Integer sourceCapacity, targetCapacity;
         private String[] locations = {}, arguments = {};
         private Environment environment;
         private ValueConverter converter = new JdbcValueConverter();
         private Builder() { }
+        public Builder source(DataSource value) { source = value; sourceCapacity = null; return this; }
+        public Builder target(DataSource value) { target = value; targetCapacity = null; return this; }
         public Builder source(DataSource value, int capacity) { source = value; sourceCapacity = capacity; return this; }
         public Builder target(DataSource value, int capacity) { target = value; targetCapacity = capacity; return this; }
         public Builder configLocations(String... values) { locations = values.clone(); return this; }

@@ -29,7 +29,7 @@ public static void main(String[] args) {
     try (var source = HostDataSources.createSource();
          var target = HostDataSources.createTarget();
          var migration = MigrationRunner.builder()
-             .source(source, 4).target(target, 4)
+             .source(source).target(target)
              .configLocations("classpath:migration.yml")
              .arguments(args).build()) {
         migration.migrate();
@@ -38,7 +38,7 @@ public static void main(String[] args) {
 }
 ```
 
-迁移异常向外传播，正式宿主不会启动。`4` 表示宿主为迁移预留的连接数，不会修改连接池容量；源、目标分别声明。Runner 关闭只释放自己的执行资源，不关闭宿主数据源。
+迁移异常向外传播，正式宿主不会启动。组件根据迁移并发配置计算两端最小连接数，自动读取 HikariCP 的 maximumPoolSize，不足时在借连接前明确报错；不会修改宿主池大小。Runner 关闭只释放自己的执行资源，不关闭宿主数据源。
 
 YAML 只描述迁移工作，完整例子见 [migration.yml](examples/migration.yml)。每张表使用独立 `tables[].batch-size`，默认 1000：有键表按该数量划分事务块、设置 fetch 提示及 JDBC batch 上限，单次调用持续迁移至完成。无键表仍为整表事务。
 
@@ -52,7 +52,9 @@ YAML 只描述迁移工作，完整例子见 [migration.yml](examples/migration.
 
 ## Spring 容器内调用
 
-宿主用 `@MigrationSource(capacity=4)`、`@MigrationTarget(capacity=4)` 标记两个 DataSource 的 @Bean 方法或实现类型，再注入 `MigrationService` 手动调用。每端必须唯一，不会因为启动容器就自动迁移。`.run()` 之前 Bean 尚不存在，请用上面的直接传对象入口。
+宿主用 `@MigrationSource`、`@MigrationTarget` 标记两个 DataSource 的 @Bean 方法或实现类型，再注入 `MigrationService` 手动调用。每端必须唯一，不会因为启动容器就自动迁移。`.run()` 之前 Bean 尚不存在，请用上面的直接传对象入口。
+
+宿主静态调用示例：[MigrationUtil.java](examples/MigrationUtil.java)，接入已有 DataSource，直接使用 MigrationUtil.migrate()/migrateAsync()，从返回句柄读取进度或注册完成通知；使用说明见 [宿主执行入口](docs/host-execution.md)。
 
 ## 构建与边界
 
@@ -65,3 +67,5 @@ Surefire 运行 `*Test`，Failsafe 运行本地 `*IT`；真实 DEV 需显式启�
 本次为破坏性改造，不兼容旧连接配置、旧批次参数和旧版本未完成检查点。Hikari 和 H2 仅用于测试/演示，不作为组件的宿主运行依赖。真实 Oracle/PostgreSQL 数据源与业务数据需由使用者在实际环境验收；认证、TLS及部署由宿主管理。
 
 贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，变化见 [CHANGELOG.md](CHANGELOG.md)。
+
+每表可选数量核验和百分比内容抽检；确认不一致会删除整张目标表并保留审计失败状态，网络异常则保留现场。默认关闭，配置和恢复说明见 [表级核验](docs/table-verification.md)。

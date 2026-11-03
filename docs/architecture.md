@@ -40,7 +40,14 @@ flowchart TD
     F -->|否| J[整表单事务和单个检查点]
     I --> K[核对总数及完成标志]
     J --> K
-    K --> L[序列收尾]
+    K --> V{启用表级核验?}
+    V -->|否| L[序列收尾]
+    V -->|是| Q[总数比对与内容抽检]
+    Q -->|通过| L
+    Q -->|确认不一致| X[持久化待清理]
+    X --> Y[清表与重置检查点同事务]
+    Y --> Z[本轮失败 下次显式重迁]
+    Q -->|查询异常| U[保留数据 下次重试核验]
     L --> M[汇总独立表结果]
 ```
 
@@ -97,3 +104,7 @@ JdbcRows 按行读取，普通 JDBC batch 同时受 batch-size 与 max-batch-byt
 ## 验证层次
 
 单元/组件测试验证事务、边界、配置、SQL、JDBC 契约及故障注入；JaCoCo 只统计 Surefire，不包含 Failsafe E2E。E2E 使用两个真实 H2 TCP 服务、独立文件数据库、Spring YAML 与方法入口，覆盖 10,000 行、断连与新 JVM 恢复。PostgreSQL 方言的 mock JDBC 测试不替代真实 PostgreSQL；真实驱动与业务数据需实际环境验收。认证、TLS、连接池及部署由宿主管理。
+
+## 表级核验与清理
+
+可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。

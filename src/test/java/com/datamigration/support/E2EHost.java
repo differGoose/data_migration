@@ -39,7 +39,10 @@ public final class E2EHost {
         String name=names.get(0);
         int capacity=role==MigrationSource.class?beans.findAnnotationOnBean(name,MigrationSource.class).capacity()
                 :beans.findAnnotationOnBean(name,MigrationTarget.class).capacity();
-        if (capacity<1) throw new IllegalArgumentException("External E2E capacity must be positive");
-        return new Endpoint(beans.getBean(name,DataSource.class),capacity);
+        if (capacity<0) throw new IllegalArgumentException("External E2E capacity must be positive");
+        var dataSource = beans.getBean(name,DataSource.class);
+        int available = com.datamigration.jdbc.PoolCapacity.resolve(dataSource,
+                role==MigrationSource.class ? "source" : "target", capacity==0 ? null : capacity).capacity();
+        return new Endpoint(dataSource,available);
     }
 }

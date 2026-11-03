@@ -55,7 +55,7 @@ class MigrationAutoConfigurationTest {
         @Bean @MigrationSource(capacity=4) DataSource another() { return new DriverManagerDataSource(); }
     }
     @Configuration(proxyBeanMethods=false) static class InvalidCapacity {
-        @Bean @MigrationSource(capacity=0) DataSource invalid() { return new DriverManagerDataSource(); }
+        @Bean @MigrationSource(capacity=-1) DataSource invalid() { return new DriverManagerDataSource(); }
     }
     @MigrationSource(capacity=4)
     static class SourceType extends DriverManagerDataSource {

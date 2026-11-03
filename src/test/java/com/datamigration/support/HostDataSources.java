@@ -9,10 +9,10 @@ import org.springframework.core.env.Environment;
 /** Test HOST owns credentials, pools and their shutdown. Not part of the migration library. */
 @Configuration(proxyBeanMethods = false)
 public class HostDataSources {
-    @Bean(destroyMethod = "close") @Lazy @MigrationSource(capacity = 10)
+    @Bean(destroyMethod = "close") @Lazy @MigrationSource
     @ConditionalOnProperty("host-databases.source.jdbc-url")
     HikariDataSource hostSource(Environment env) { return create(env, "source"); }
-    @Bean(destroyMethod = "close") @Lazy @MigrationTarget(capacity = 10)
+    @Bean(destroyMethod = "close") @Lazy @MigrationTarget
     @ConditionalOnProperty("host-databases.target.jdbc-url")
     HikariDataSource hostTarget(Environment env) { return create(env, "target"); }
     private HikariDataSource create(Environment env, String side) {

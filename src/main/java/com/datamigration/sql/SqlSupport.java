@@ -71,6 +71,25 @@ public final class SqlSupport {
         }
     }
 
+    /** Verification cannot infer the semantics of SQL expressions or generated columns. */
+    public static List<String> verificationColumns(TableTask task) {
+        try {
+            Insert insert = (Insert) CCJSqlParserUtil.parse(task.insertSql());
+            if (insert.getColumns() == null || insert.getColumns().size() != task.fields().size()
+                    || !(insert.getSelect() instanceof Values values)
+                    || !(values.getExpressions() instanceof ParenthesedExpressionList<?> expressions)
+                    || expressions.size() != task.fields().size()
+                    || expressions.stream().anyMatch(e -> !(e instanceof net.sf.jsqlparser.expression.JdbcParameter)))
+                throw new IllegalArgumentException();
+            List<String> columns = insert.getColumns().stream().map(c -> identifier(c.getColumnName())).toList();
+            if (columns.stream().map(c -> c.toUpperCase(Locale.ROOT)).distinct().count() != columns.size())
+                throw new IllegalArgumentException();
+            return columns;
+        } catch (Exception failure) {
+            throw new IllegalArgumentException("verification requires explicit INSERT columns and one plain ? per field");
+        }
+    }
+
     /** Tokenizer for policy checks, ignoring quoted literals, identifiers and comments. */
     static List<String> tokens(String sql) {
         List<String> result = new ArrayList<>();

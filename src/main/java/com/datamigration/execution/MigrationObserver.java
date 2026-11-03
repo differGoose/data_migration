@@ -10,6 +10,7 @@ public interface MigrationObserver {
     default void restored(String task, Checkpoint summary) { }
     default void counted(String task, long total) { }
     default void committed(String task, long batch, long written, long skipped) { }
+    default void phase(String task, String state) { }
     default void finalizing(String task) { }
     default void finished(TableResult result) { }
 }

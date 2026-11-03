@@ -36,6 +36,12 @@ select-sql 是一个可信管理员提供的 SELECT，insert-sql 是单行 VALUE
 
 target-table 必须与 INSERT 的实际目标一致；只支持普通 table 或 schema.table 标识符。primary-key 是查询结果中稳定非空唯一的列，可为业务唯一键；联合键顺序如 [TENANT_ID, ID] 在恢复时不变。SELECT 不支持 CTE、运行时 ? 参数或锁定查询。SQL 校验不代替源账号只读权限。
 
+## 表完成后的核验
+
+`tables[].verification.enabled` 默认 false；开启后必须配置 `sample-percent`，范围为大于 0、至多 100，支持小数。每张表独立设置。先比较源查询、目标整表和审计数量，再按向上取整的样本数量随机比对迁移字段。开启要求公共 skip-limit=0，以及显式 INSERT 列清单和普通问号参数。
+
+**确认不一致会清空目标整张表，包含原有数据**，同时重置当前任务检查点，下次显式调用从头重迁。网络和查询异常保留现场，只重试核验。详细行为、审计状态及成本见 [表级核验](table-verification.md)。
+
 ## 并发和连接容量
 
 同实例的同步/异步调用共用防重复状态，运行中返回同一执行句柄及进度；JVM 共享单许可阻止不同 Runner 和 Spring Context 的重叠执行，不影响一次执行内部的并发。不同进程须由部署方保证不重叠。
@@ -47,7 +53,13 @@ max-concurrent-tables 控制表并发，worker-count 控制单表块并发：
 | 有键，W 个 worker | W+1 | W+1 |
 | 无键，1 个 worker | 1 | 2 |
 
-两张单 worker 有键表同时执行，至少源4、目标4。宿主在 builder.source/target 或源/目标注解的 capacity 中声明可供迁移的连接数，组件执行前预检；声明不会自动扩容池。共享业务池还需要额外为业务预留容量。
+默认使用 builder.source(source).target(target)，或不填写capacity的 @MigrationSource / @MigrationTarget。组件对启用表按每端需求取最大的 max-concurrent-tables 张合计，与实际 HikariCP maximumPoolSize 比较；两张单worker有键表同时执行至少源4、目标4，四张各2个worker并且表并发为4时至少各12，表并发为2时至少各6。同一个底层池同时作为源和目标时，还要满足两端总需求。
+
+容量不足在借连接/执行迁移SQL前报错，例如 Insufficient source pool capacity; required=12, maximumPoolSize=10。同步首次调用直接抛出，异步通过 completion() 和安全日志交回宿主；修复宿主池大小后可以显式重试，预检会重新读取上限。不会自动扩容、调整并发或修改池属性。
+
+自动模式支持HikariDataSource及其子类、Spring DelegatingDataSource包装链和支持标准JDBC unwrap的包装。未知池、路由包装无法确定实际目标、包装循环或无法读取正数上限时明确失败，不猜测、不默认跳过。宿主如使用无法识别的自定义/非池化DataSource，可继续选择 source(ds, capacity)/target(ds, capacity)，或注解的正数capacity；这是显式声明，不是自动读取。识别到Hikari池时，显式声明也不能掩盖更小的实际池上限。
+
+自动检查只验证配置上限，不保证共享业务池当时的空闲连接数。宿主仍需为业务留出余量或使用专用迁移池；有共享池迁移额度时，可通过可选显式capacity限制预算。已成功的同实例重复调用仍只返回原句柄，不重新检查池或重跑迁移。
 
 宿主负责池借用超时、JDBC 连接和读超时、连接回收及动态凭据。Runner 不关闭数据源。连接借出后设为 autoCommit=false、READ_COMMITTED，结束未完成事务后恢复原 autoCommit/隔离级别并归还。请提供干净的独立连接，不要包装正在使用的业务事务 Connection。
 

@@ -21,7 +21,7 @@
 | --- | --- |
 | job_id / task_name / batch_no | 一轮工作、表任务和事务块的复合主键 |
 | target_table | 已解析的目标表名称，方便定位任务 |
-| state | PLANNED待执行、RUNNING执行中、SUCCEEDED完成；汇总还可为FINALIZING、FAILED、COMMIT_UNKNOWN或FINALIZATION_FAILED |
+| state | PLANNED待执行、RUNNING执行中、SUCCEEDED完成；汇总还可为FINALIZING、FAILED、COMMIT_UNKNOWN或FINALIZATION_FAILED；核验状态见文末及表级核验指南 |
 | lower_key / upper_key | 有键事务块的键范围；下界不含、上界包含；保存带 JDBC 类型的 JSON，不是拼接 SQL |
 | expected_rows | 该事务块应该读取的源行数，包含允许跳过的行；汇总行不使用此字段表示总量 |
 | committed_rows | 块内已提交写入数；汇总行为所有已成功块的累计数 |
@@ -31,7 +31,7 @@
 | total_rows | 汇总行中准备阶段的完整源查询行数；恢复检查源行数是否变化 |
 | prepared | 汇总标志：已完成准备；有键重导的DELETE与该标志一起提交，恢复不再重复清表 |
 | planning_complete | 汇总标志：有键范围已全部规划；仍需完成已有待执行块 |
-| data_complete | 汇总标志：数据阶段已完成，之后只处理序列等收尾 |
+| data_complete | 汇总标志：数据阶段已完成，之后处理核验、序列等收尾；核验清理成功后重置为false |
 | error_code | 脱敏错误类别、SQLState或厂商码，不保存业务行及原始异常消息 |
 | started_at / updated_at | 记录首次创建及最近更新的时间 |
 
@@ -77,3 +77,7 @@ JVM许可解决一次执行与另一次执行的排斥。一次执行内部的�
 DDL：[PostgreSQL](../src/main/resources/db/postgresql/migration-audit.sql)、[H2](../src/main/resources/db/h2/migration-audit.sql)。运行引擎不建表、不修改旧结构，也不转换旧检查点。
 
 旧版未完成任务先用旧版本完成。新版审计结构由使用者人工准备，建议使用独立的新审计表保留历史；没有未完成任务再切换。不要直接拿仍含必填fingerprint列的旧表运行新版，否则新记录会因缺失该列而插入失败。本地合成测试的建表由测试设施自行负责。
+
+## 表级核验与清理
+
+可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。

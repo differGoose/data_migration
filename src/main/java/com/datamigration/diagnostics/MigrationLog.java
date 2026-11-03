@@ -46,7 +46,11 @@ public final class MigrationLog {
             "Migration engine is closed", "Migration runner is closed", "Migration service is closed",
             "A migration is already running", "A migration is already running in this JVM",
             "Migration stopped before all tasks completed", "Migration interrupted", "Migration capacity must be positive",
-            "Unsupported target database; expected H2 or PostgreSQL");
+            "Unsupported target database; expected H2 or PostgreSQL",
+            "verification requires explicit INSERT columns and one plain ? per field",
+            "verification requires data-migration.strategy.skip-limit=0",
+            "verification target must differ from audit table", "Verification temporary storage failed",
+            "Unsupported verification binary representation", "Verification interrupted", "Verification cleanup interrupted");
 
     private MigrationLog() { }
 
@@ -182,8 +186,10 @@ public final class MigrationLog {
             category = VENDOR_CATEGORIES.getOrDefault(sql.getErrorCode(), SQL_CATEGORIES.getOrDefault(state,
                     SQL_CATEGORIES.getOrDefault(state.substring(0, Math.min(2, state.length())), "UNKNOWN")));
             if (sql instanceof SQLTimeoutException) category = "TIMEOUT";
+            if (sql instanceof com.datamigration.verification.VerificationMismatch) category = "VERIFICATION_MISMATCH";
             reason = "Check " + frame.endpoint + " pool capacity/acquisition timeout, connectivity, account permissions and the indicated configuration property";
             if (VALIDATION_REASONS.contains(Objects.toString(sql.getMessage(), ""))) reason = sql.getMessage();
+            if (sql instanceof com.datamigration.verification.VerificationMismatch mismatch) reason = mismatch.code();
         } else if (failure instanceof org.springframework.boot.context.config.ConfigDataLocationNotFoundException
                 || failure instanceof org.springframework.boot.context.config.ConfigDataResourceNotFoundException) {
             category = "CONFIGURATION_RESOURCE_NOT_FOUND";
@@ -194,6 +200,9 @@ public final class MigrationLog {
             if (VALIDATION_REASONS.contains(message)) reason = message;
             else if (message.startsWith("Missing source column:")) reason = "Source column missing from query result";
             else if (message.startsWith("Missing or ambiguous primary-key column:")) reason = "Primary-key column missing or ambiguous";
+            else if (message.matches("Insufficient (source|target|shared) pool capacity; required=[0-9]+, maximumPoolSize=[0-9]+")
+                    || message.matches("Cannot determine (source|target) pool capacity; provide a supported pool or explicit migration capacity")
+                    || message.matches("Cannot read (source|target) maximumPoolSize; configure a positive pool maximum before migration")) reason = message;
             else if (message.startsWith("Insufficient pool capacity;")) reason = "Declared migration capacity is below the connection budget";
         }
         return context(frame) + " category=" + category + " reason=" + reason + " " + SqlErrors.summary(failure);

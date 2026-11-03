@@ -8,6 +8,7 @@ import com.datamigration.dialect.DatabaseDialect;
 import com.datamigration.jdbc.*;
 import com.datamigration.model.*;
 import com.datamigration.sql.*;
+import com.datamigration.verification.*;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -21,6 +22,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
     private final int targetCapacity;
     private static final Semaphore EXECUTION = new Semaphore(1);
     private final JdbcRows rows;
+    private final TableVerifier verifier;
     private final AtomicBoolean running = new AtomicBoolean();
     private final Object lifecycle = new Object();
     private final ThreadLocal<Boolean> engineWorker = ThreadLocal.withInitial(() -> false);
@@ -33,6 +35,7 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         this.connections = connections; this.sourceCapacity = sourceCapacity;
         this.targetCapacity = targetCapacity;
         this.rows = new JdbcRows(converter);
+        this.verifier = new TableVerifier(converter);
     }
 
     @Override public MigrationResult execute(MigrationPlan plan) { return execute(plan, MigrationObserver.NONE); }
@@ -112,18 +115,24 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         if (plan.tables().isEmpty()) throw new IllegalArgumentException("No enabled table tasks");
         if (plan.jobId() == null || !plan.jobId().matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,119}"))
             throw new IllegalArgumentException("Invalid job-id");
-        int parallel = plan.strategy().maxConcurrentTables();
-        // One coordinator plus worker connections; keyless tables use one source and two targets.
-        int sources = plan.tables().stream().mapToInt(t -> t.keyed() ? t.workerCount() + 1 : 1)
-                .boxed().sorted(Comparator.reverseOrder()).limit(parallel).mapToInt(Integer::intValue).sum();
-        int targets = plan.tables().stream().mapToInt(t -> t.workerCount() + 1)
-                .boxed().sorted(Comparator.reverseOrder()).limit(parallel).mapToInt(Integer::intValue).sum();
+        var budget = ConnectionBudget.forPlan(plan);
+        int sources = budget.source(), targets = budget.target();
         MigrationLog.info("Migration connection budget", "requiredSource=" + sources + " declaredSource=" + sourceCapacity
                 + " requiredTarget=" + targets + " declaredTarget=" + targetCapacity);
         if (sources > sourceCapacity || targets > targetCapacity)
             throw new IllegalArgumentException("Insufficient pool capacity; source requires " + sources + ", target requires " + targets);
         Set<String> targetsSeen = new HashSet<>();
         for (TableTask task : plan.tables()) {
+            if (task.verification().enabled()) {
+                String property = "data-migration.tables[" + plan.tables().indexOf(task) + "].verification";
+                MigrationLog.stage("VERIFICATION_PREFLIGHT", "target", property);
+                if (plan.strategy().skipLimit() != 0) throw new IllegalArgumentException("verification requires data-migration.strategy.skip-limit=0");
+                SqlSupport.query(task);
+                MigrationLog.stage("VERIFICATION_PREFLIGHT", "target", property);
+                SqlSupport.verificationColumns(task);
+                if (task.targetTable().equalsIgnoreCase(plan.strategy().auditTableName()))
+                    throw new IllegalArgumentException("verification target must differ from audit table");
+            }
             if (!task.keyed() && task.workerCount() != 1) throw new IllegalArgumentException("Keyless tables require one worker");
             if (!targetsSeen.add(task.targetTable().toUpperCase(Locale.ROOT)))
                 throw new IllegalArgumentException("Duplicate target table");
@@ -143,6 +152,8 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         CheckpointStore store = new CheckpointStore(plan.strategy().auditTableName(), plan.jobId(), task.name());
         boolean finalizedData = false;
         boolean checkpointValidated = false;
+        String verificationFailure = null;
+        String verificationCode = null;
         try (Connection control = targetConnection();
              Connection source = sourceConnection()) {
             try {
@@ -160,6 +171,14 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                 if (summary != null && summary.succeeded()) {
                     MigrationLog.info("Table already succeeded; reusing audited result", "");
                     return result(task, start, summary, TableResult.Status.SUCCEEDED, null);
+                }
+                if (summary != null && summary.state().equals("CLEANUP_PENDING")) {
+                    verificationFailure = "CLEANUP_PENDING";
+                    verificationCode = store.failureCode(control);
+                    cleanupVerification(control, task, store, verificationCode);
+                    verificationFailure = null; verificationCode = null;
+                    summary = store.find(control, 0, false);
+                    observer.restored(task.name(), summary);
                 }
                 if (summary != null) MigrationLog.info("Resuming unfinished table", "dataComplete=" + summary.dataComplete());
                 List<String> keys = preflight(source, control, query, task);
@@ -213,6 +232,32 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                     finalizedData = true;
                     MigrationLog.info("Table data committed", "");
                 }
+                if (task.verification().enabled()) {
+                    verificationFailure = "VERIFICATION_ERROR";
+                    MigrationLog.stage("VERIFICATION_START", "-", "verification");
+                    store.state(control, 0, "VERIFYING"); control.commit();
+                    observer.phase(task.name(), "VERIFYING");
+                    try {
+                        Checkpoint completed = store.find(control, 0, false);
+                        if (source.isClosed()) {
+                            try (Connection verificationSource = sourceConnection()) {
+                                verifier.verify(verificationSource, control, query, task, completed.committed());
+                            }
+                        } else verifier.verify(source, control, query, task, completed.committed());
+                        control.commit();
+                        verificationFailure = null;
+                    } catch (VerificationMismatch mismatch) {
+                        MigrationLog.remember(mismatch);
+                        verificationCode = mismatch.code();
+                        // No destructive action until the intent is durable. Recovery must never use old batches.
+                        control.rollback();
+                        verificationFailure = "CLEANUP_PENDING";
+                        store.failure(control, 0, "CLEANUP_PENDING", verificationCode); control.commit();
+                        cleanupVerification(control, task, store, verificationCode);
+                        verificationFailure = "VERIFICATION_FAILED";
+                        throw mismatch;
+                    }
+                }
                 observer.finalizing(task.name());
                 MigrationLog.stage("SEQUENCE_FINALIZE", "target", "sequence");
                 store.find(control, 0, true);
@@ -228,21 +273,46 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
             } catch (Exception failure) { MigrationLog.remember(failure); throw failure; }
         } catch (Exception exception) {
             MigrationLog.error("Table migration failed", exception);
-            String state = exception instanceof CommitUnknownException ? "COMMIT_UNKNOWN" :
+            String state = verificationFailure != null ? verificationFailure : exception instanceof CommitUnknownException ? "COMMIT_UNKNOWN" :
                     finalizedData ? "FINALIZATION_FAILED" : "FAILED";
-            String error = exception instanceof IllegalArgumentException ? "INVALID_CONFIGURATION_OR_MAPPING" : SqlErrors.summary(exception);
+            String error = verificationCode != null ? verificationCode : exception instanceof IllegalArgumentException ? "INVALID_CONFIGURATION_OR_MAPPING" : SqlErrors.summary(exception);
             Checkpoint summary = null;
             MigrationLog.stage("AUDIT_FAILURE_REPORT", "target", "data-migration.strategy.audit.table-name");
             try (Connection report = targetConnection()) {
                 summary = store.find(report, 0, false);
                 if (checkpointValidated && summary != null) {
                     summary = store.find(report, 0, true);
+                    if (verificationFailure != null && (summary.state().equals("CLEANUP_PENDING") || summary.state().equals("VERIFICATION_FAILED"))) {
+                        state = summary.state();
+                        error = store.failureCode(report);
+                    }
                     if (!summary.succeeded()) { store.failure(report, 0, state, error); report.commit(); }
                 }
             } catch (Exception reportFailure) {
                 MigrationLog.secondary("Could not persist table failure; original error retained", reportFailure);
             }
             return result(task, start, summary, TableResult.Status.valueOf(state), error);
+        }
+    }
+
+    private void cleanupVerification(Connection target, TableTask task, CheckpointStore store, String code) throws SQLException {
+        MigrationLog.stage("VERIFICATION_CLEANUP", "target", "verification");
+        observer.phase(task.name(), "CLEANUP_PENDING");
+        MigrationLog.info("Verification cleanup started", "");
+        try {
+            store.find(target, 0, true);
+            if (Thread.currentThread().isInterrupted()) throw new SQLException("Verification cleanup interrupted", "57014");
+            try (var statement = CheckpointStore.statement(target, "DELETE FROM " + SqlSupport.table(task.targetTable()))) {
+                statement.executeUpdate();
+            }
+            store.verificationCleared(target, code);
+            MigrationLog.stage("VERIFICATION_CLEANUP_COMMIT", "target", "verification");
+            target.commit();
+            MigrationLog.info("Verification cleanup completed", "");
+        } catch (SQLException | RuntimeException failure) {
+            MigrationLog.secondary("Verification cleanup failed; durable summary determines recovery", failure);
+            try { target.rollback(); } catch (SQLException rollback) { MigrationLog.secondary("Verification cleanup rollback failed", rollback); }
+            throw failure;
         }
     }
 

@@ -22,6 +22,9 @@
 | FAILED | 该表任务失败，可能已有成功事务块 | 修复原因后保持原 job-id 续跑 |
 | COMMIT_UNKNOWN | 数据库提交结果暂时无法确认 | 恢复连接后用原 job-id 核实，不能换新 job 盲目追加 |
 | FINALIZATION_FAILED | 数据阶段完成，但序列等收尾失败 | 修复收尾原因后用原 job-id 重试 |
+| VERIFICATION_ERROR | 无法完成核验，未确认数据错误 | 保留数据，修复连接/查询等原因后重试核验 |
+| CLEANUP_PENDING | 核验确认不一致，尚未确认清理完成 | 修复清理原因，原 job-id 下先清理再重迁 |
+| VERIFICATION_FAILED | 核验不一致，目标整表已清理 | 原 job-id 显式调用，从头迁移 |
 
 一张表失败不表示其他表全部回滚。引擎会等待各表结束，通过 MigrationException.result() 返回逐表结果；应用应把这次调用报告为失败或部分完成。配置、Bean 或连接池初始化错误也可能以其他异常形式抛出。
 
@@ -80,3 +83,7 @@ batch_no=0 是表汇总，正数是事务块，不要把汇总和批次一起 SU
 整张目标表都可重做时，才考虑 CLEAR_AND_REIMPORT，它使用 DELETE 清整张目标表。源 SELECT 只选了一个范围，并不限制目标 DELETE 范围。业务约束、外键、触发器与回滚成本应事先确认；真实 E2E 遵循正式配置，不额外禁止该模式；使用者应明确授权其整表删除效果。
 
 不要通过随意删除审计记录制造“新的一轮”：原目标数据还在，新的执行者将失去可靠的已提交信息。
+
+## 表级核验与清理
+
+可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。

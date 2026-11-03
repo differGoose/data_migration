@@ -97,8 +97,8 @@ public class Application {
         try (var source = HostDataSources.createSource();
              var target = HostDataSources.createTarget();
              var migration = MigrationRunner.builder()
-                 .source(source, 4)
-                 .target(target, 4)
+                 .source(source)
+                 .target(target)
                  .configLocations("classpath:migration.yml")
                  .arguments(args)
                  .build()) {
@@ -109,7 +109,7 @@ public class Application {
 }
 ```
 
-只有迁移成功才执行最后一行。这里没有启动临时 Spring 容器，宿主业务 Bean/Web 服务均在迁移后启动。Builder 的容量声明不创建或调整池；4 个连接足以运行一张单 worker 有键表。多表并发需按 [连接预算](configuration.md)计算。
+只有迁移成功才执行最后一行。这里没有启动临时 Spring 容器，宿主业务 Bean/Web 服务均在迁移后启动。Builder 自动读取 HikariCP 池上限，根据 YAML 的表/worker 并发进行预算预检；不会创建或调整池。连接不足时明确报出 source/target、required 和 maximumPoolSize，详见 [连接预算](configuration.md)。
 
 源/目标池在本例属于迁移专用资源，所以由宿主的 try-with-resources 关闭；如果是随后宿主仍要使用的共享池，应由宿主保留其生命周期，只关闭 Runner。组件永远不会关闭传入的 DataSource。
 
@@ -129,11 +129,11 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 public class MigrationDataSourcesConfiguration {
     @Bean(destroyMethod = "close")
-    @MigrationSource(capacity = 4)
+    @MigrationSource
     public DataSource source() { return HostDataSources.createSource(); }
 
     @Bean(destroyMethod = "close")
-    @MigrationTarget(capacity = 4)
+    @MigrationTarget
     public DataSource target() { return HostDataSources.createTarget(); }
 }
 ```

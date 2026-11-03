@@ -19,6 +19,7 @@ public final class SqlErrors {
     }
     public static String summary(Throwable error) {
         for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof com.datamigration.verification.VerificationMismatch mismatch) return mismatch.code();
             if (current instanceof SQLException sql) {
                 String state = sql.getSQLState();
                 return "SQLSTATE=" + (state != null && state.matches("[A-Za-z0-9]{5}") ? state : "unknown")

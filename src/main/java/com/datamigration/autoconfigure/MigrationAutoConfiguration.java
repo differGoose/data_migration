@@ -31,7 +31,7 @@ public class MigrationAutoConfiguration {
             ConfigurableListableBeanFactory beans, ValueConverter converter, ObjectProvider<MigrationEngine> engines) {
         return new SpringMigrationService(configuration, beans, converter, engines);
     }
-    private record Endpoint(DataSource dataSource, int capacity) { }
+    private record Endpoint(DataSource dataSource, Integer capacity) { }
     private static Endpoint find(ConfigurableListableBeanFactory beans, Class<? extends Annotation> role) {
         try (var diagnostic = MigrationLog.phase("DATASOURCE_RESOLVE", role == MigrationSource.class ? "source" : "target", "-")) {
             try { return findEndpoint(beans, role); }
@@ -49,10 +49,10 @@ public class MigrationAutoConfiguration {
         String name = matches.get(0);
         int capacity = role == MigrationSource.class ? beans.findAnnotationOnBean(name, MigrationSource.class).capacity()
                 : beans.findAnnotationOnBean(name, MigrationTarget.class).capacity();
-        if (capacity < 1) throw new IllegalArgumentException("Migration capacity must be positive");
+        if (capacity < 0) throw new IllegalArgumentException("Migration capacity must be positive");
         var dataSource = beans.getBean(name, DataSource.class);
-        MigrationLog.info("Host DataSource selected", "bean=" + MigrationLog.safe(name) + " capacity=" + capacity);
-        return new Endpoint(dataSource, capacity);
+        MigrationLog.info("Host DataSource selected", "bean=" + MigrationLog.safe(name) + " capacity=" + (capacity == 0 ? "auto" : capacity));
+        return new Endpoint(dataSource, capacity == 0 ? null : capacity);
     }
     public static final class SpringMigrationService implements MigrationService, AutoCloseable {
         private final MigrationConfiguration configuration;
@@ -82,8 +82,7 @@ public class MigrationAutoConfiguration {
                     var source = find(beans, MigrationSource.class);
                     var target = find(beans, MigrationTarget.class);
                     session = new MigrationSession(configuration,
-                            new DataSourceConnections(source.dataSource(), target.dataSource()),
-                            source.capacity(), target.capacity(), converter);
+                            source.dataSource(), source.capacity(), target.dataSource(), target.capacity(), converter);
                 }
                 current = session;
             }

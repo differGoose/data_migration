@@ -4,9 +4,9 @@
 
 ## 交给组件什么
 
-直接将现有源、目标 DataSource 传给 MigrationRunner，并分别声明可供迁移使用的连接容量。Spring 场景使用 @MigrationSource / @MigrationTarget 标记宿主的 Bean。完整代码见 [接入指南](getting-started.md)和 [通用宿主封装](../examples/HostMigration.java)。
+直接将现有源、目标 DataSource 传给 MigrationRunner，默认自动检查 HikariCP 的池上限，无需额外声明容量。Spring 场景使用 @MigrationSource / @MigrationTarget 标记宿主的 Bean。完整代码见 [接入指南](getting-started.md)和 [通用宿主封装](../examples/HostMigration.java)。
 
-容量是宿主为迁移预留的连接数量，不会自动修改实际连接池大小。组件借用独立 Connection，设置迁移所需事务属性，结束未完成事务后归还；不接收宿主业务事务中的 Connection。
+组件按 YAML 并发计算最小连接需求，自动读取 HikariCP 的 maximumPoolSize，容量不足会在借连接前报错，不调整实际池大小。共享业务池的瞬时可用连接不由静态上限保证，宿主仍需预留业务余量；无法读取池上限的自定义 DataSource 可用显式容量入口。组件借用独立 Connection，设置迁移所需事务属性，结束未完成事务后归还；不接收宿主业务事务中的 Connection。
 
 ## 生命周期
 

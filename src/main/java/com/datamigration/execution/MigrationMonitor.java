@@ -35,7 +35,8 @@ public final class MigrationMonitor implements MigrationObserver {
     @Override public synchronized void tableStarted(String task) { state(task, "PREFLIGHT"); }
     @Override public synchronized void restored(String task, Checkpoint summary) {
         if (summary != null) tables.put(task, new TableProgress(task,
-                summary.succeeded() ? "SUCCEEDED" : summary.dataComplete() ? "FINALIZING" : "PREFLIGHT",
+                summary.state().startsWith("VERIFICATION") || summary.state().equals("CLEANUP_PENDING") || summary.state().equals("VERIFYING")
+                        ? summary.state() : summary.succeeded() ? "SUCCEEDED" : summary.dataComplete() ? "FINALIZING" : "PREFLIGHT",
                 summary.prepared() ? summary.total() : null, summary.committed(), summary.skipped(), null));
     }
     @Override public synchronized void counted(String task, long total) {
@@ -47,6 +48,7 @@ public final class MigrationMonitor implements MigrationObserver {
         tables.put(task, new TableProgress(task, "RUNNING", previous.totalRows(),
                 previous.committedRows() + written, previous.skippedRows() + skipped, null));
     }
+    @Override public synchronized void phase(String task, String phase) { state(task, phase); }
     @Override public synchronized void finalizing(String task) { state(task, "FINALIZING"); }
     @Override public synchronized void finished(TableResult result) {
         var previous = tables.get(result.taskName());

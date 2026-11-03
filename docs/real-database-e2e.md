@@ -54,7 +54,7 @@ phase-timeout约束普通E2E执行及其取消请求，查询也设置JDBC超时
 mvn -B -ntp test-compile failsafe:integration-test failsafe:verify "-Dit.test=HostMigrationE2EIT" "-Dhost.e2e.enabled=true"
 ```
 
-IDE为JUnit运行配置添加VM参数 `-Dhost.e2e.enabled=true` 后运行测试方法。默认跳过真实数据库入口；显式启用但未填写连接信息会报错，不回退到H2。两个池各4个连接，需要更多连接时同步调整容量常量；连接和读取超时由宿主按驱动配置。普通模式下迁移异常直接导致测试失败；没有额外的源/目标内容比对或自动重复执行，重复运行仍按正式job-id恢复逻辑处理。
+IDE为JUnit运行配置添加VM参数 `-Dhost.e2e.enabled=true` 后运行测试方法。默认跳过真实数据库入口；显式启用但未填写连接信息会报错，不回退到H2。两个池各4个连接，需要更多连接时调整宿主实际池大小，Runner自动校验上限；连接和读取超时由宿主按驱动配置。普通模式下迁移异常直接导致测试失败；没有额外的源/目标内容比对或自动重复执行，重复运行仍按正式job-id恢复逻辑处理。
 
 前文DatabaseE2E.run和下文ConfiguredDatabaseE2EIT仍是额外数据校验入口，才需要e2e配置。仅模拟真实宿主调用时，使用本节的HostMigrationE2EIT即可。
 
@@ -62,7 +62,7 @@ IDE为JUnit运行配置添加VM参数 `-Dhost.e2e.enabled=true` 后运行测试�
 
 ## 方式二：main 或 Maven 运行
 
-因为独立进程拿不到你当前JVM里的Java对象，需提供一个仅注册源/目标DataSource的Spring配置类。它只是把你已有的数据源交出来，不需要实现新的接口。示例见 [配置类模板](../examples/e2e/ExternalDataSourcesConfiguration.java)，替换其中 YourExistingDataSources。数据源Bean必须带 `@MigrationSource(capacity=...)`、`@MigrationTarget(capacity=...)`，各一个；其他无标记DataSource不会被选中。
+因为独立进程拿不到你当前JVM里的Java对象，需提供一个仅注册源/目标DataSource的Spring配置类。它只是把你已有的数据源交出来，不需要实现新的接口。示例见 [配置类模板](../examples/e2e/ExternalDataSourcesConfiguration.java)，替换其中 YourExistingDataSources。数据源Bean必须带 `@MigrationSource`、`@MigrationTarget`（HikariCP默认自动读取池上限；不支持的自定义数据源可显式填写正数capacity），各一个；其他无标记DataSource不会被选中。
 
 配置类位于test classpath；不要传整个业务应用启动类。测试只加载你显式指定的类，不默认导入H2宿主。Bean的销毁由该测试宿主上下文按你的配置负责；如果是借来的共享对象，必须显式写 `@Bean(destroyMethod="")` 禁用Spring默认的close推断；模板采用这种方式。如果该测试宿主自己创建并拥有连接池，则由该配置类明确声明 `destroyMethod="close"` 回收。
 
