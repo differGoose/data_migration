@@ -65,3 +65,14 @@
 
 - [component/AsyncMigrationTest.java](../src/test/java/com/datamigration/component/AsyncMigrationTest.java)：同步/异步交叉触发合并、已提交进度、失败恢复、重启、Spring单例、提交核实、sequence收尾、无键整表事务、中断及关闭清理。
 - [support/MigrationAwait.java](../src/test/java/com/datamigration/support/MigrationAwait.java)：测试/命令行边界等待执行句柄并保留原异常类型，不改变正式接口的异步能力。
+
+- [component/PoolCapacityTest.java](../src/test/java/com/datamigration/component/PoolCapacityTest.java)：Hikari自动上限、并发预算、无借连接提前失败、共享池合计、包装识别、失败后重检、Spring默认自动模式及显式兼容入口。
+
+- [component/TableVerificationTest.java](../src/test/java/com/datamigration/component/TableVerificationTest.java)：每表比例、有键/无键、清表与检查点重置原子性、查询异常保留现场、新引擎重迁及 sequence 顺序。
+- [component/TableVerifierTest.java](../src/test/java/com/datamigration/component/TableVerifierTest.java)：乱序、重复行、类型转换、二进制、LOB、NULL 及取消。
+- [unit/DigestFilesTest.java](../src/test/java/com/datamigration/unit/DigestFilesTest.java)：分块多轮归并、空输入及取消清理；为访问包内可见设施，Java package 保留 com.datamigration.verification。
+
+- [component/VerificationRunnerTest.java](../src/test/java/com/datamigration/component/VerificationRunnerTest.java)：正式 Runner 配置绑定、核验中同步/异步防重复、进度及清理后重试。
+- [e2e/VerificationRecoveryIT.java](../src/test/java/com/datamigration/e2e/VerificationRecoveryIT.java)：公共 Runner 在 VERIFYING/CLEANUP_PENDING 后强制终止 JVM，新的 JVM 读取持久化审计完成恢复；使用独立合成 H2 文件数据库。
+
+- [component/AsyncProgressLoggingTest.java](../src/test/java/com/datamigration/component/AsyncProgressLoggingTest.java)：每次同步/异步调用输出同一快照、初始未知状态、最终成功/失败报告、重试及名称脱敏；不使用数据库。

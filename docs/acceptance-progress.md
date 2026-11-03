@@ -1,8 +1,38 @@
 # 本地实施与验收记录
 
+## 2026-11-03：main 提交前检查
+
+JDK 17 `mvn -B -ntp clean verify` 成功：290 个单元/组件测试通过，23 个集成测试中 20 个通过、3 个真实数据库入口默认跳过。提交前审查发现待清理恢复后内存进度未清零，已修复并加入中间计数回归断言；修正后再次执行 `mvn -B -ntp -Dit.test=VerificationRecoveryIT verify`，290 个单元/组件测试与 2 个独立 JVM 核验恢复测试通过。最终 UT 行覆盖率 98.72%、分支覆盖率 87.73%，两项 85% 门槛通过。审查复核无剩余问题；保留开发版本号，不修改英文分支，不连接真实数据库。
+
+
+## 2026-11-03：调用时进度日志
+
+每次 migrate/migrateAsync 调用输出 INFO 内存快照及逐表已提交计数，后台结束输出最终状态；首次同步等待和运行中交叉防重复保持不变。JDK 17 `mvn -B -ntp -DskipITs verify` 通过，290 个单元/组件测试全部通过，行覆盖率 98.72%、分支覆盖率 87.65%，两项 85% 门槛通过。64 个异步/日志/核验入口定向回归通过，149 个本地文档链接通过。此次没有重跑集成测试；本页下方记录此前完整本地集成验收。未连接真实数据库，未提交或推送。
+
+
+## 2026-11-03：表级核验与失败清理
+
+- JDK 17 执行 `mvn -B -ntp clean verify` 成功，日志 `target-table-verification-jdk17.log`（本地忽略文件，不入库）。288 个单元/组件测试通过；23 个集成测试中 20 个通过、3 个真实数据库入口默认跳过。
+- JaCoCo UT 行覆盖率 98.65% (1680/1703)，分支覆盖率 87.48% (1034/1182)，原有两项 85% 门槛保持通过。
+- 覆盖每表不同抽检比例、精确取整、空表、联合键和无键表、最低容量、重复行、类型转换、宿主自定义转换器、LOB、日志脱敏及同步/异步交叉防重复。
+- 覆盖确认不一致后整表清理、清理与当前任务检查点重置原子性、清理意图持久化失败、清理提交响应丢失、查询超时保留数据、sequence 收尾重试；公共 Runner 的独立 JVM 在 VERIFYING/CLEANUP_PENDING 后强制退出，再由新 JVM 恢复成功。
+- Java 17 编译宿主示例成功；外部数据源模板使用仅位于 target 的宿主占位类型完成编译检查。147 个 README/docs 本地链接通过，审计 DDL 未改动。
+- 保留此前未提交的外部数据源自动容量和宿主工具示例改动；没有连接真实 Oracle/PostgreSQL，没有自动提交、推送或修改英文分支。
+
+
 TLS专项测试H2TlsIT、证书子进程及ECS专用示例已移除；下文对应名称和结果仅为历史证据，不代表当前功能。当前数据源和部署职责见 [宿主数据源边界](database-credentials.md)。
 
 以下早期记录为历史验收证据；连接配置和批量参数已进行破坏性改造，当前接入方式以 README 和 getting-started.md 为准。当前仅支持与验证 JDK 17；本文下方所有双版本、执行锁和指纹记录均为历史，不代表当前能力。
+
+## HikariCP自动容量预检（2026-11-01）
+
+新增source(DataSource)/target(DataSource)自动入口，MigrationUtil移除SOURCE_CAPACITY/TARGET_CAPACITY。源/目标标记capacity默认0表示自动；显式正数入口仍保留给自定义/非池化DataSource或共享池迁移额度。默认按启用表、max-concurrent-tables和worker-count计算最低连接数，与实际HikariCP maximumPoolSize比较；支持Spring DelegatingDataSource链及标准JDBC unwrap。同一个底层池作为两端时合并校验需求，不修改宿主池，不新增生产Hikari依赖。
+
+不足时在借连接前报出source/target/shared、required和实际maximumPoolSize；同步首次调用抛原异常，异步从completion和安全日志取得失败。无法读取上限时明确失败，不猜测；显式声明无法掩盖识别到的更小实际Hikari池。失败后显式重试重新读取上限，成功缓存语义不变。静态上限检查不保证共享业务池实时空闲量，宿主负责业务余量。
+
+Amazon Corretto JDK17.0.16完整 `mvn -B -ntp clean verify` 通过：258项单元/组件测试；21项集成测试中18项通过、3项真实入口默认跳过。UT行覆盖1430/1447（98.83%），分支836/950（88.00%），保留各85%门槛。新增17项容量测试覆盖并发预算、最小池上限、无借连接失败、同池合并、包装及未知类型、失败后池调整与审计续跑、无键预算、Spring默认自动选择及安全日志。日志target-pool-final17.log。
+
+HostMigration/MigrationUtil按release17编译通过；独立JVM实际运行静态工具类，验证不手填容量、池过小时提前失败、修正后重试、同步/异步复用及宿主池所有权，日志target-pool-host-smoke17.log。BeforeStartupDemo使用自动入口运行通过，日志target-pool-demo17.log。未连接真实数据库、未提交或推送，英文分支未修改。
 
 ## TLS专项设施与旧接入遗留清理（2026-11-01）
 

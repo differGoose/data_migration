@@ -22,7 +22,7 @@
 | MIGRATION_REUSE | 同实例重复调用，返回运行中/已成功的原句柄；不会再次执行 |
 | CONFIG_LOAD / CONFIG_BIND | 配置资源是否可读、工作目录、classpath、YAML 缩进、未知字段和校验约束。未知字段日志只列属性路径；绑定错误不打印被拒绝的值 |
 | DATASOURCE_RESOLVE | 直接入口是否提供两端 DataSource；Spring 入口每端是否恰好有一个标记 Bean |
-| CAPACITY_CHECK | 声明给迁移使用的连接容量是否达到预算。有键表每端 W+1，无键表源1/目标2；多表同时运行需合计预算，详见配置文档 |
+| CAPACITY_CHECK | 自动读取的 HikariCP maximumPoolSize 是否达到 YAML 并发预算；显式模式同时检查声明的迁移额度。有键表每端 W+1，无键表源1/目标2；多表同时运行需合计预算，详见配置文档 |
 | SOURCE_CONNECT / TARGET_CONNECT | 引擎开始打开对应端连接；正式 Runner 随后细分为获取连接和初始化事务属性 |
 | CONNECTION_ACQUIRE | 宿主 DataSource 借连接失败；看 endpoint 区分 source/target，检查账号、网络、池容量和借用超时 |
 | CONNECTION_INITIALIZE | 已借到连接，但读取/设置事务属性失败；与借不到连接是不同阶段 |
@@ -86,3 +86,22 @@ Runner 的配置加载不会初始化 Spring Boot 日志系统。`.run()` 前日
 宿主工厂创建 DataSource 若在调用 Runner 前就失败，组件尚未获得控制权，无法为这一步产生日志；应由宿主为其工厂添加安全的阶段提示。组件自身的所有级别均不输出驱动异常消息、堆栈、SQL、参数、业务行、键边界、JDBC URL、密码或 token；宿主、连接池和驱动的其他 logger 需由宿主另行管理。
 
 同步/异步入口的执行句柄、进度与异常通知方式见 [宿主执行入口](host-execution.md)。异步方法返回成功只表示取得句柄，不代表迁移已经成功；后台结果看 completion() 或 progress()。
+
+## 表级核验与清理
+
+可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。
+
+## 每次调用打印迁移进度
+
+宿主调用 migrate() 或 migrateAsync() 时，默认 INFO 自动输出一份内存进度快照：总体 status、finished、已确认提交/跳过数量，以及每张表的 state、totalRows、committedRows 和 skippedRows。运行中重复调用也会打印，仍返回同一个执行句柄，不启动另一轮迁移。后台执行结束时再输出最终快照。
+
+```text
+Migration progress at invocation ... status=RUNNING finished=false tablesKnown=true tables=2 committedRows=120 skippedRows=0
+Table migration progress ... task=customer ... state=RUNNING totalRows=1000 committedRows=100 skippedRows=0
+Table migration progress ... task=orders ... state=VERIFYING totalRows=20 committedRows=20 skippedRows=0
+Migration attempt finished ... status=SUCCEEDED finished=true tablesKnown=true tables=2 committedRows=1020 skippedRows=0
+```
+
+finished=true 表示本轮已经结束，需要结合 status 区分 SUCCEEDED 和 FAILED，不代表一定成功。首次异步调用时配置可能尚未绑定，日志会显示 tablesKnown=false；表已知但尚未统计源数量时 totalRows=unknown，不把未知误报成零。计数只包含确认提交的数据，不包含正在执行但尚未提交的事务；成功表重复调用会输出原有结果。
+
+日志直接读取线程安全内存快照，不查询数据库、不借连接，也不启动定时轮询。需持续观察时宿主可读取 execution.progress()；失败后再次调用迁移方法仍表示显式重试，不是只查询状态。migrate() 首次调用仍同步等待，migrateAsync() 首次调用立即返回；运行中重复调用两者都会立即返回当前句柄。日志由宿主后端控制，需启用 com.datamigration 的 INFO。

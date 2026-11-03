@@ -17,15 +17,15 @@
 
 ## 宿主如何调用
 
-可直接复制 [HostMigration.java](../examples/HostMigration.java) 作为宿主封装。宿主只创建一次 Runner，将其保留为服务成员。两端 DataSource 由宿主提供，容量按迁移并发预算填写：
+可直接复制 [HostMigration.java](../examples/HostMigration.java) 作为宿主封装。宿主只创建一次 Runner，将其保留为服务成员。两端 HikariCP DataSource 由宿主提供，连接需求和池上限自动校验：
 
 ```java
 private final MigrationRunner migration;
 
 public HostMigration(DataSource source, DataSource target) {
     migration = MigrationRunner.builder()
-            .source(source, 4)
-            .target(target, 4)
+            .source(source)
+            .target(target)
             .configLocations("classpath:migration.yml")
             .build();
 }
@@ -51,6 +51,42 @@ MigrationProgress progress = again.progress();
 ```
 
 **不要每次调用都创建/关闭 Runner，也不要在提交异步任务后立即退出包含 Runner 的 try-with-resources。** `close()` 会停止迁移并等待事务、工作线程清理。宿主关闭时再关闭长期持有的 Runner；Runner 不关闭宿主 DataSource，数据源由宿主在迁移清理结束后关闭。
+
+## Spring Boot 宿主静态工具类
+
+复制 [MigrationUtil.java](../examples/MigrationUtil.java) 这一个文件到宿主项目，修改 package 为宿主的包，并放入 Spring 组件扫描范围；也可以使用 @Import(MigrationUtil.class) 引入。没有嵌套类，不需要在调用方注入迁移服务，也不自动执行迁移。
+
+修改两处接入信息：@Qualifier 中的 sourceDataSource/targetDataSource 改为宿主实际数据源 Bean 名；CONFIG_LOCATION 指向宿主的迁移 YAML。不再填写 SOURCE_CAPACITY 或 TARGET_CAPACITY，组件根据 YAML 计算最低连接数并检查实际 HikariCP 池上限。数据源已由宿主管理，工具类不创建连接池、不负责认证。若已有其他 MigrationService 注册方式，选择一种入口，避免重复配置。
+
+Spring 完成该配置类的初始化后，宿主任意普通类都能直接调用：
+
+```java
+// 异步启动，不等迁移结束。
+MigrationExecution execution = MigrationUtil.migrateAsync();
+
+// 执行中再次调用同步或异步方法，返回同一执行句柄，不重复迁移。
+// 如果上轮已失败，再次调用表示显式要求恢复。
+MigrationExecution repeated = MigrationUtil.migrate();
+
+// 查询原句柄进度，不会触发任务或重试。
+MigrationProgress progress = execution.progress();
+System.out.println(progress.status());
+System.out.println(progress.committedRows());
+System.out.println(progress.tables());
+
+// 可选：为这个句柄注册一次完成通知。
+execution.completion().whenComplete((result, failure) -> {
+    if (failure == null) {
+        // 使用 result.tables() 处理最终结果。
+    } else {
+        // 根据 execution.progress() 和组件安全日志处理失败，不输出原始异常链。
+    }
+});
+```
+
+首次想同步执行，直接 MigrationUtil.migrate() 即可。无需自己创建线程池、new工具类或每次创建Runner。Spring关闭时释放Runner并清除工具类引用，宿主数据源仍由宿主管理。初始化前或关闭后调用会明确报错。
+
+这个静态示例每个JVM只允许一个宿主Spring Context持有它，重复初始化会明确拒绝。普通Java或容器外接入可使用前面的HostMigration封装，由宿主自己管理初始化和关闭。
 
 ## 读取进度与完成结果
 
@@ -107,3 +143,11 @@ MigrationResult result = execution.completion().toCompletableFuture().join();
 同实例成功结果会保留在内存中。进程重启、重新创建 Runner 后，仍按目标审计恢复成功表及未完成批次；内存进度不代替审计。恢复保持原 job-id、任务、数据源、配置和源范围不变。失败后只有显式调用才开启下一轮，不新增后台自动恢复或无限重试。
 
 自定义 MigrationEngine 仍使用内部同步 SPI，由后台入口调用；若未接入进度观察器，表级计数在引擎返回最终结果后更新。本文实时提交进度针对默认 JdbcMigrationEngine。
+
+## 表级核验与清理
+
+可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。
+
+## 调用时自动打印进度
+
+migrate() / migrateAsync() 每次调用都会在 INFO 打印总体状态、是否结束、各表阶段及已提交/跳过数量；后台结束时自动打印最终快照。首次配置尚未加载时明确输出 tablesKnown=false，源行数未统计时显示 unknown，不为打印进度同步加载配置或访问数据库。同步方法首次等待完成、异步方法首次立即返回的约定不变。日志格式与字段解释见 [日志排错指南](logging-and-troubleshooting.md)。
