@@ -25,7 +25,8 @@
 | [e2e/H2ScenariosIT.java](../src/test/java/com/datamigration/e2e/H2ScenariosIT.java) | `com.datamigration.e2e` | 完整迁移与类型。 |
 | [resilience/ConfiguredResilienceIT.java](../src/test/java/com/datamigration/resilience/ConfiguredResilienceIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
 | [resilience/DevHarnessContractIT.java](../src/test/java/com/datamigration/resilience/DevHarnessContractIT.java) | `com.datamigration.resilience` | 用人工预备H2验证DEV宿主DataSource扩展，不代表真实数据库验收。 |
-| [resilience/H2ProcessRecoveryIT.java](../src/test/java/com/datamigration/resilience/H2ProcessRecoveryIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
+| [resilience/H2ProcessRecoveryIT.java](../src/test/java/com/datamigration/resilience/H2ProcessRecoveryIT.java) | `com.datamigration.resilience` | 批次提交边界及 sequence 校准后的进程退出与恢复。 |
+| [resilience/H2VerificationRecoveryIT.java](../src/test/java/com/datamigration/resilience/H2VerificationRecoveryIT.java) | `com.datamigration.resilience` | 内容核验开始前源端断网，原 Runner 恢复核验。 |
 | [resilience/H2RecoveryIT.java](../src/test/java/com/datamigration/resilience/H2RecoveryIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
 | [resilience/H2ResilienceIT.java](../src/test/java/com/datamigration/resilience/H2ResilienceIT.java) | `com.datamigration.resilience` | 断网、崩溃和恢复。 |
 | [support/DatabaseFixture.java](../src/test/java/com/datamigration/support/DatabaseFixture.java) | `com.datamigration.support` | 数据库、宿主、代理、控制和数据校验设施。 |
@@ -68,11 +69,11 @@
 
 - [component/PoolCapacityTest.java](../src/test/java/com/datamigration/component/PoolCapacityTest.java)：Hikari自动上限、并发预算、无借连接提前失败、共享池合计、包装识别、失败后重检、Spring默认自动模式及显式兼容入口。
 
-- [component/TableVerificationTest.java](../src/test/java/com/datamigration/component/TableVerificationTest.java)：每表比例、有键/无键、清表与检查点重置原子性、查询异常保留现场、新引擎重迁及 sequence 顺序。
+- [component/TableVerificationTest.java](../src/test/java/com/datamigration/component/TableVerificationTest.java)：每表比例、有键/无键、不一致保留数据/检查点、查询异常保留现场、新引擎只核验及人工重迁及 sequence 顺序。
 - [component/TableVerifierTest.java](../src/test/java/com/datamigration/component/TableVerifierTest.java)：乱序、重复行、类型转换、二进制、LOB、NULL 及取消。
 - [unit/DigestFilesTest.java](../src/test/java/com/datamigration/unit/DigestFilesTest.java)：分块多轮归并、空输入及取消清理；为访问包内可见设施，Java package 保留 com.datamigration.verification。
 
-- [component/VerificationRunnerTest.java](../src/test/java/com/datamigration/component/VerificationRunnerTest.java)：正式 Runner 配置绑定、核验中同步/异步防重复、进度及清理后重试。
-- [e2e/VerificationRecoveryIT.java](../src/test/java/com/datamigration/e2e/VerificationRecoveryIT.java)：公共 Runner 在 VERIFYING/CLEANUP_PENDING 后强制终止 JVM，新的 JVM 读取持久化审计完成恢复；使用独立合成 H2 文件数据库。
+- [component/VerificationRunnerTest.java](../src/test/java/com/datamigration/component/VerificationRunnerTest.java)：正式 Runner 配置绑定、核验中同步/异步防重复、进度、不一致后只重试核验，以及人工清理后从头重迁。
+- [e2e/VerificationRecoveryIT.java](../src/test/java/com/datamigration/e2e/VerificationRecoveryIT.java)：公共 Runner 在 VERIFYING/VERIFICATION_MISMATCH 后强制终止 JVM，新的 JVM 读取持久化审计完成恢复；使用独立合成 H2 文件数据库。
 
 - [component/AsyncProgressLoggingTest.java](../src/test/java/com/datamigration/component/AsyncProgressLoggingTest.java)：每次同步/异步调用输出同一快照、初始未知状态、最终成功/失败报告、重试及名称脱敏；不使用数据库。

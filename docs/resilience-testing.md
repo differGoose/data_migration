@@ -20,6 +20,11 @@ mvn -B -ntp verify "-Dit.test=ConfiguredResilienceIT" "-Dresilience.config=file:
 
 仅支持 JDK 17。父进程先确认故障宿主 JVM 结束，再启动恢复宿主；任意时刻只运行一个迁移进程。新版不包含数据库执行锁、所有权令牌或跨进程接管测试。恢复保持原配置、实际数据源和源范围不变；事务检查点和数据原子提交保证仍保留。
 
+## 数据提交后的故障
+
+- `H2VerificationRecoveryIT` 在数量核验通过、内容扫描开始前切断源端 TCP 代理。本轮应记录 `VERIFICATION_ERROR` 并保留已提交数据和批次审计。恢复代理后，原 Runner 重新核验并将汇总标记为 `SUCCEEDED`。
+- `H2ProcessRecoveryIT` 在 sequence 已校准、成功汇总尚未写入时强制退出子 JVM。目标汇总应保留 `FINALIZING` 和 `data_complete=true`。将 sequence 调高后，用新 JVM 恢复，验证数据及批次审计保持原样，sequence 保留较高值。
+
 ## DEV 数据源与代理端口
 
 [DEV模板](../examples/resilience/oracle-postgresql.yml)仅包含场景、代理路由、验证查询及迁移规则。将 resilience.configuration-classes 改为宿主提供的配置类全名；它在父进程和每个独立子进程中加载，源、目标 Bean 分别标记 @MigrationSource / @MigrationTarget，默认自动检查HikariCP池上限；不支持的自定义数据源可显式声明迁移连接容量。

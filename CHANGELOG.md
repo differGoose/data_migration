@@ -2,13 +2,15 @@
 
 ## Unreleased
 
-- 修复待清理恢复后内存进度沿用旧提交数量的问题，清理后先恢复零计数，再累计重迁批次，避免调用日志中的临时双倍计数。
+- 上轮结束后再次调用迁移方法会创建新句柄，并按目标审计跳过成功表或恢复未完成表。人工清理目标数据及对应任务的全部审计后，可用原 Runner 重迁。仅缺汇总行时报告 AUDIT_SUMMARY_MISSING。
+
+- 核验不一致改为保留数据和检查点，记录 VERIFICATION_MISMATCH；下次显式调用只重新核验。移除自动清表/重置检查点及清理日志，人工重迁由宿主停止迁移后成对清理目标和对应任务审计。旧清理状态明确要求人工重置，避免旧记录语义混淆。
 
 
 - migrate/migrateAsync 每次调用输出 INFO 进度快照和各表已提交数量，后台结束自动输出最终状态；初始配置/总数未知时明确标记，不额外借连接或查询数据库。
 
 
-- 新增每表可选总数核验和精确比例内容抽检，支持无主键及重复行，摘要分块排序控制内存；确认不一致后整表清理与当前任务检查点重置同事务完成。现有审计字段记录核验/待清理/失败状态，查询异常保留数据，显式重试按阶段恢复；核验通过后才执行 sequence。
+- 新增每表可选总数核验和精确比例内容抽检，支持无主键及重复行，摘要分块排序控制内存；不一致和查询异常均保留现场，通过现有审计字段记录状态，显式重试只核验及收尾；核验通过后才执行 sequence。
 
 
 - 源/目标DataSource入口默认自动读取HikariCP maximumPoolSize，按YAML并发计算最低连接需求并提前报出端点、required和实际上限；同池合并检查，失败重试重新读取上限，不修改宿主池。源/目标标记的capacity默认自动，可选显式容量入口继续用于自定义数据源或共享池迁移额度。
@@ -16,7 +18,7 @@
 - 删除H2 TLS专项测试、证书子进程及SSL测试开关；测试统一使用普通TCP。移除未接入实际流程的旧公开接口AuditRepository、TableTaskExecutor、TableReader、BatchWriter、RowCursor。
 - 清理未读取的测试驱动/池配置和重复H2恢复资源；DEV恢复模板改为宿主提供数据源配置类。认证、TLS、连接池和部署教程收敛为职责说明，删除ECS专用入口和Dockerfile，保留通用宿主封装。
 
-- 同步 migrate() 与新增 migrateAsync() 共用执行状态，运行中和成功后重复调用返回同一 MigrationExecution；通过 progress() 读取不可变已提交进度，通过 completion() 接收原 MigrationResult/异常。同步首次调用仍等待完成并传播异常；失败后显式重试，关闭等待清理，不关闭宿主 DataSource。返回类型由 MigrationResult 调整为 MigrationExecution。
+- 同步 migrate() 与新增 migrateAsync() 共用执行状态，运行中重复调用返回同一 MigrationExecution，结束后再次调用会重新读取审计；通过 progress() 读取不可变已提交进度，通过 completion() 接收原 MigrationResult/异常。同步首次调用仍等待完成并传播异常；失败后显式重试，关闭等待清理，不关闭宿主 DataSource。返回类型由 MigrationResult 调整为 MigrationExecution。
 
 - 增加配置、数据源、容量、表预检、数据提交及 sequence 收尾关键日志；批次细节 DEBUG、有限重试 WARN、最终失败 ERROR。跨线程关联 runId/任务/批次，保留首个安全失败阶段与 SQLState/厂商码，不输出驱动消息、SQL 或业务数据。MigrationException 消息列出失败任务及安全摘要；新增启动前日志与排错指南。
 

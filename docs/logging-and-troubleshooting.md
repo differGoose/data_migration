@@ -19,7 +19,7 @@
 
 | stage | 检查内容 |
 | --- | --- |
-| MIGRATION_REUSE | 同实例重复调用，返回运行中/已成功的原句柄；不会再次执行 |
+| MIGRATION_REUSE | 同实例重复调用，返回运行中的原句柄；不会再次执行 |
 | CONFIG_LOAD / CONFIG_BIND | 配置资源是否可读、工作目录、classpath、YAML 缩进、未知字段和校验约束。未知字段日志只列属性路径；绑定错误不打印被拒绝的值 |
 | DATASOURCE_RESOLVE | 直接入口是否提供两端 DataSource；Spring 入口每端是否恰好有一个标记 Bean |
 | CAPACITY_CHECK | 自动读取的 HikariCP maximumPoolSize 是否达到 YAML 并发预算；显式模式同时检查声明的迁移额度。有键表每端 W+1，无键表源1/目标2；多表同时运行需合计预算，详见配置文档 |
@@ -87,9 +87,9 @@ Runner 的配置加载不会初始化 Spring Boot 日志系统。`.run()` 前日
 
 同步/异步入口的执行句柄、进度与异常通知方式见 [宿主执行入口](host-execution.md)。异步方法返回成功只表示取得句柄，不代表迁移已经成功；后台结果看 completion() 或 progress()。
 
-## 表级核验与清理
+## 表级核验与人工重迁
 
-可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。
+可在每表 verification 中启用数量检查及内容抽检。核验不一致记录 VERIFICATION_MISMATCH，保留目标数据、成功批次和 data_complete=true；本轮失败，下次显式调用只重试核验，通过后才执行 sequence 并标记 SUCCEEDED。查询异常记录 VERIFICATION_ERROR，同样保留现场。组件不因核验失败清表或重置检查点；需要重迁时由宿主停止迁移后手动清理对应目标及任务审计，再用原 Runner 调用迁移。配置和人工重迁步骤见 [表级核验指南](table-verification.md)。
 
 ## 每次调用打印迁移进度
 
@@ -102,6 +102,6 @@ Table migration progress ... task=orders ... state=VERIFYING totalRows=20 commit
 Migration attempt finished ... status=SUCCEEDED finished=true tablesKnown=true tables=2 committedRows=1020 skippedRows=0
 ```
 
-finished=true 表示本轮已经结束，需要结合 status 区分 SUCCEEDED 和 FAILED，不代表一定成功。首次异步调用时配置可能尚未绑定，日志会显示 tablesKnown=false；表已知但尚未统计源数量时 totalRows=unknown，不把未知误报成零。计数只包含确认提交的数据，不包含正在执行但尚未提交的事务；成功表重复调用会输出原有结果。
+finished=true 表示本轮已经结束，需要结合 status 区分 SUCCEEDED 和 FAILED，不代表一定成功。首次异步调用时配置可能尚未绑定，日志会显示 tablesKnown=false；表已知但尚未统计源数量时 totalRows=unknown，不把未知误报成零。计数只包含确认提交的数据，不包含正在执行但尚未提交的事务；新一轮会输出当前审计记录中的成功结果。
 
-日志直接读取线程安全内存快照，不查询数据库、不借连接，也不启动定时轮询。需持续观察时宿主可读取 execution.progress()；失败后再次调用迁移方法仍表示显式重试，不是只查询状态。migrate() 首次调用仍同步等待，migrateAsync() 首次调用立即返回；运行中重复调用两者都会立即返回当前句柄。日志由宿主后端控制，需启用 com.datamigration 的 INFO。
+日志直接读取线程安全内存快照，不查询数据库、不借连接，也不启动定时轮询。需持续观察时宿主可读取 execution.progress()；上一轮结束后再次调用迁移方法会发起新一轮，并重新读取目标审计。migrate() 等待它发起的新一轮结束，migrateAsync() 立即返回新句柄。运行中重复调用两者都会立即返回当前句柄。日志由宿主后端控制，需启用 com.datamigration 的 INFO。

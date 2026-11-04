@@ -11,7 +11,7 @@
 - `batch_no=0`：该表的汇总和阶段状态，一张表一条。
 - `batch_no>0`：该表的事务块，从1编号；每块保存范围、预期数量及提交结果。
 
-同 job、同任务重启会读取这些记录，成功表直接返回，未完成表恢复未成功块。每次 API 调用的 runId 只用于区分执行报告，不影响恢复。换新 job-id 表示新工作；默认追加模式不清目标，也不根据目标已有行去重。
+同一 job、同一任务每轮结束后再次调用都会读取这些记录。成功表直接返回审计结果，未完成表恢复未成功块。汇总缺失但仍有批次记录时，调用返回 AUDIT_SUMMARY_MISSING，保留现有记录供人工核对。每次 API 调用的 runId 只用于区分执行报告，不影响恢复。换新 job-id 表示新工作；默认追加模式不清目标，也不根据目标已有行去重。
 
 新版不生成 `__table_lock__` 内部记录，不保存 LOCK 标记、执行令牌或 fingerprint。恢复时配置、实际数据源和源范围必须不变，由调用方保证；组件不检测配置漂移。需要修改迁移规则时，应另行规划新工作及目标数据处理，不能直接复用旧检查点。
 
@@ -31,7 +31,7 @@
 | total_rows | 汇总行中准备阶段的完整源查询行数；恢复检查源行数是否变化 |
 | prepared | 汇总标志：已完成准备；有键重导的DELETE与该标志一起提交，恢复不再重复清表 |
 | planning_complete | 汇总标志：有键范围已全部规划；仍需完成已有待执行块 |
-| data_complete | 汇总标志：数据阶段已完成，之后处理核验、序列等收尾；核验清理成功后重置为false |
+| data_complete | 汇总标志：数据阶段已完成，之后处理核验、序列等收尾；核验不一致也保留true，重试不会重插数据 |
 | error_code | 脱敏错误类别、SQLState或厂商码，不保存业务行及原始异常消息 |
 | started_at / updated_at | 记录首次创建及最近更新的时间 |
 
@@ -78,6 +78,6 @@ DDL：[PostgreSQL](../src/main/resources/db/postgresql/migration-audit.sql)、[H
 
 旧版未完成任务先用旧版本完成。新版审计结构由使用者人工准备，建议使用独立的新审计表保留历史；没有未完成任务再切换。不要直接拿仍含必填fingerprint列的旧表运行新版，否则新记录会因缺失该列而插入失败。本地合成测试的建表由测试设施自行负责。
 
-## 表级核验与清理
+## 表级核验与人工重迁
 
-可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。
+可在每表 verification 中启用数量检查及内容抽检。核验不一致记录 VERIFICATION_MISMATCH，保留目标数据、成功批次和 data_complete=true；本轮失败，下次显式调用只重试核验，通过后才执行 sequence 并标记 SUCCEEDED。查询异常记录 VERIFICATION_ERROR，同样保留现场。组件不因核验失败清表或重置检查点；需要重迁时由宿主停止迁移后手动清理对应目标及任务审计，再用原 Runner 调用迁移。配置和人工重迁步骤见 [表级核验指南](table-verification.md)。

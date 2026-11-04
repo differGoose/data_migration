@@ -79,21 +79,6 @@ public final class CheckpointStore {
     public void dataComplete(Connection connection) throws SQLException {
         update(connection, "data_complete=TRUE,state='FINALIZING'", 0);
     }
-    public String failureCode(Connection connection) throws SQLException {
-        try (var statement = statement(connection, "SELECT error_code FROM " + table + " WHERE job_id=? AND task_name=? AND batch_no=0")) {
-            statement.setString(1, job); statement.setString(2, task);
-            try (var result = statement.executeQuery()) { return result.next() ? result.getString(1) : null; }
-        }
-    }
-
-    /** Called in the same transaction as the whole-target DELETE. Keep the summary as failure evidence. */
-    public void verificationCleared(Connection connection, String code) throws SQLException {
-        try (var statement = statement(connection, "DELETE FROM " + table + " WHERE job_id=? AND task_name=? AND batch_no>0")) {
-            statement.setString(1, job); statement.setString(2, task); statement.executeUpdate();
-        }
-        update(connection, "state='VERIFICATION_FAILED',error_code=?,prepared=FALSE,data_complete=FALSE,planning_complete=FALSE,"
-                + "committed_rows=0,skipped_rows=0,processed_rows=0,total_rows=0", 0, code);
-    }
     public void progress(Connection connection, long processed) throws SQLException {
         update(connection, "processed_rows=?", 0, processed);
     }

@@ -15,7 +15,7 @@ public final class MigrationException extends RuntimeException {
         // Only known engine codes may enter a public exception message, never arbitrary supplied text.
         if (error != null && (error.matches("SQLSTATE=[A-Za-z0-9]{5}; vendor=-?[0-9]+")
                 || error.matches("SQLSTATE=unknown; vendor=-?[0-9]+")
-                || java.util.Set.of("INVALID_CONFIGURATION_OR_MAPPING", "MIGRATION_FAILED").contains(error))) return error;
+                || java.util.Set.of("INVALID_CONFIGURATION_OR_MAPPING", "MIGRATION_FAILED", "AUDIT_SUMMARY_MISSING").contains(error))) return error;
         return "MIGRATION_FAILED";
     }
     public MigrationResult result() { return result; }

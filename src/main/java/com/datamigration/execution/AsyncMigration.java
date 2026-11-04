@@ -15,17 +15,7 @@ public final class AsyncMigration implements AutoCloseable {
     public AsyncMigration(Function<MigrationMonitor, MigrationResult> work) { this.work = work; }
     public synchronized MigrationExecution start() {
         if (closed) throw new IllegalStateException("Migration service is closed");
-        if (current != null && current.reusable()) {
-            logProgress(current, "Migration progress at invocation");
-            try (var diagnostic = MigrationLog.invocation(current.id())) {
-                MigrationLog.job(current.snapshot().jobId());
-                MigrationLog.stage("MIGRATION_REUSE", "-", "data-migration");
-                MigrationLog.info(current.snapshot().status() == com.datamigration.api.MigrationProgress.Status.SUCCEEDED
-                        ? "Migration already succeeded; returning existing result"
-                        : "Migration already running; returning current progress", "");
-            }
-            return current.execution();
-        }
+        if (current != null && current.reusable()) return reuseCurrent();
         var monitor = new MigrationMonitor();
         current = monitor;
         logProgress(monitor, "Migration progress at invocation");
@@ -35,11 +25,21 @@ public final class AsyncMigration implements AutoCloseable {
         catch (RuntimeException | Error failure) { worker = null; monitor.fail(failure); logProgress(monitor, "Migration attempt finished"); }
         return monitor.execution();
     }
+    // Called with this instance's lock held. Keep the reuse decision and returned handle paired.
+    private MigrationExecution reuseCurrent() {
+        logProgress(current, "Migration progress at invocation");
+        try (var diagnostic = MigrationLog.invocation(current.id())) {
+            MigrationLog.job(current.snapshot().jobId());
+            MigrationLog.stage("MIGRATION_REUSE", "-", "data-migration");
+            MigrationLog.info("Migration already running; returning current progress", "");
+        }
+        return current.execution();
+    }
     public MigrationExecution startSync() {
         MigrationExecution execution;
         synchronized (this) {
             if (closed) throw new IllegalStateException("Migration service is closed");
-            if (current != null && current.reusable()) return start();
+            if (current != null && current.reusable()) return reuseCurrent();
             execution = start();
         }
         try { execution.completion().toCompletableFuture().get(); }

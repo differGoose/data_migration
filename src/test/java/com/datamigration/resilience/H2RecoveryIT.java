@@ -17,6 +17,10 @@ import java.sql.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.*;
 
+/**
+ * Stops either the source or target H2 server after a batch has committed, then
+ * verifies that migration resumes from the persisted checkpoints after the server restarts.
+ */
 class H2RecoveryIT {
     @TempDir Path directory;
 

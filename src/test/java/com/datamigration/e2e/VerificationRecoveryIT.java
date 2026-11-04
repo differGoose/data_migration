@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.*;
 class VerificationRecoveryIT {
     @TempDir Path directory;
 
-    @ParameterizedTest @ValueSource(strings = {"VERIFYING", "CLEANUP_PENDING"})
+    @ParameterizedTest @ValueSource(strings = {"VERIFYING", "VERIFICATION_MISMATCH"})
     void crashAndNewJvmRecoveryUseOnlyPersistedAudit(String boundary) throws Exception {
         String source = "jdbc:h2:file:" + directory.resolve("source").toString().replace('\\','/') + ";WRITE_DELAY=0";
         String target = "jdbc:h2:file:" + directory.resolve("target").toString().replace('\\','/') + ";WRITE_DELAY=0";
@@ -46,6 +46,14 @@ class VerificationRecoveryIT {
         try (var connection = DatabaseFixture.connection(target); var statement = connection.createStatement();
              var result = statement.executeQuery("SELECT state FROM migration_audit WHERE batch_no=0")) {
             assertThat(result.next()).isTrue(); assertThat(result.getString(1)).isEqualTo(boundary);
+        }
+        if (boundary.equals("VERIFICATION_MISMATCH")) {
+            assertThat(child(yaml,source,target,"RECOVER","still-mismatch.log")).isNotZero();
+            try (var connection = DatabaseFixture.connection(target); var statement = connection.createStatement();
+                 var result = statement.executeQuery("SELECT COUNT(*) FROM A WHERE NAME='bad'")) {
+                result.next(); assertThat(result.getLong(1)).isEqualTo(21);
+            }
+            DatabaseFixture.execute(target,"UPDATE A SET NAME='row-' || ID");
         }
         assertThat(child(yaml,source,target,"RECOVER","recover.log")).isZero();
         try (var connection = DatabaseFixture.connection(target); var statement = connection.createStatement();
@@ -76,11 +84,11 @@ class VerificationRecoveryIT {
                     String message = event.getFormattedMessage();
                     if (message.startsWith("Content verification started")) {
                         if (args[3].equals("VERIFYING")) Runtime.getRuntime().halt(73);
-                        if (args[3].equals("CLEANUP_PENDING")) try {
+                        if (args[3].equals("VERIFICATION_MISMATCH")) try {
                             DatabaseFixture.execute(args[2],"UPDATE A SET NAME='bad'");
                         } catch (Exception failure) { throw new IllegalStateException(failure); }
                     }
-                    if (args[3].equals("CLEANUP_PENDING") && message.startsWith("Verification cleanup started")) Runtime.getRuntime().halt(73);
+                    if (args[3].equals("VERIFICATION_MISMATCH") && message.startsWith("Table migration completed") && message.contains("status=VERIFICATION_MISMATCH")) Runtime.getRuntime().halt(73);
                 }
             };
             appender.start(); logger.addAppender(appender);

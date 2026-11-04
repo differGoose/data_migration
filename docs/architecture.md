@@ -27,8 +27,8 @@ DataSourceConnections 只借用连接，设置 READ_COMMITTED、autoCommit=false
 ```mermaid
 flowchart TD
     A[migrate 或 migrateAsync] --> R{同实例已有执行?}
-    R -->|运行中或已成功| S[返回同一执行句柄和最新进度]
-    R -->|未执行或上轮失败| T[创建后台执行]
+    R -->|运行中| S[返回同一执行句柄和最新进度]
+    R -->|未执行或上轮结束| T[创建后台执行]
     T --> B[绑定校验与连接预算]
     B --> C[tryAcquire JVM共享许可]
     C --> D[有界表调度]
@@ -44,11 +44,9 @@ flowchart TD
     V -->|否| L[序列收尾]
     V -->|是| Q[总数比对与内容抽检]
     Q -->|通过| L
-    Q -->|确认不一致| X[持久化待清理]
-    X --> Y[清表与重置检查点同事务]
-    Y --> Z[本轮失败 下次显式重迁]
+    Q -->|确认不一致| X[保留数据和检查点 记录核验不一致]
+    X --> Y[本轮失败 下次显式重试核验]
     Q -->|查询异常| U[保留数据 下次重试核验]
-    L --> M[汇总独立表结果]
 ```
 
 ## SQL 与源数据条件
@@ -71,7 +69,7 @@ YAML 是受信任管理员配置。JSqlParser 验证单个 SELECT 和目标 INSE
 
 无键表 worker-count 必须为 1，全部读取和写入属于一个目标事务，坏数据不跳过。batch-size 只控制 executeBatch，不能触发 commit。处理进度可以由协调连接单独记录，但它不代表已提交数据。进程中断后的目标事务回滚；下次从整表开始。
 
-默认 APPEND_RESUME 不清除目标。显式 CLEAR_AND_REIMPORT 使用 DELETE，避免不同数据库 TRUNCATE 的隐式提交差异。有键表先清除并提交 prepared 标记，再导入；同一 job-id 恢复不再清除。无键表将 DELETE、所有 INSERT 和成功检查点置于同一事务。新一轮全量重导需要新的 job-id，不覆盖旧审计历史。
+默认 APPEND_RESUME 不清除目标。显式 CLEAR_AND_REIMPORT 使用 DELETE，避免不同数据库 TRUNCATE 的隐式提交差异。有键表先清除并提交 prepared 标记，再导入；同一 job-id 恢复不再清除。无键表将 DELETE、所有 INSERT 和成功检查点置于同一事务。要保留旧审计历史，可以用新 job-id 重导。若人工清理了目标数据和对应任务的全部审计，原 Runner 可以用同一 job-id 从头迁移。
 
 目标触发器、外键及权限由部署方负责；不自动级联、不临时禁用约束、不自动 upsert。独立表并行，一表失败不阻止其他表完成；最终 MigrationException.result() 保留逐表状态。表内批次失败后停止启动排队批次，已经运行的批次完成自身事务处理，未执行范围保留为待恢复检查点。
 
@@ -85,7 +83,7 @@ YAML 是受信任管理员配置。JSqlParser 验证单个 SELECT 和目标 INSE
 
 ## JVM 执行协调与事务行锁
 
-默认 JdbcMigrationEngine 公共 execute 入口使用 static、单许可 Semaphore.tryAcquire。同一 Runner/Service 的同步与异步入口在进入引擎前合并重复触发，返回同一个执行句柄；成功后缓存结果、失败后显式重试。不同 Runner、Spring Context 或目标表的引擎重叠执行仍立即失败，且拒绝前不借连接。进度观察器只在原事务确认提交、恢复检查点与表阶段切换时更新内存，不额外查询审计库。自定义 MigrationEngine 由宿主负责自己的执行协调。
+默认 JdbcMigrationEngine 公共 execute 入口使用 static、单许可 Semaphore.tryAcquire。同一 Runner/Service 的同步与异步入口在进入引擎前合并重复触发，返回同一个执行句柄；上一轮结束后再次调用会创建新执行并读取目标审计。不同 Runner、Spring Context 或目标表的引擎重叠执行仍立即失败，且拒绝前不借连接。进度观察器只在原事务确认提交、恢复检查点与表阶段切换时更新内存，不额外查询审计库。自定义 MigrationEngine 由宿主负责自己的执行协调。
 
 许可属于实际执行调用；close 只请求取消并等待清理，不释放许可。成功、异常、中断及取消均经 ExecutorScope 等待所有表和 worker 退出、连接事务结束后，最后在 execute 的 finally 归还许可。关闭未执行的 Runner 不影响正在运行的迁移。
 
@@ -105,6 +103,6 @@ JdbcRows 按行读取，普通 JDBC batch 同时受 batch-size 与 max-batch-byt
 
 单元/组件测试验证事务、边界、配置、SQL、JDBC 契约及故障注入；JaCoCo 只统计 Surefire，不包含 Failsafe E2E。E2E 使用两个真实 H2 TCP 服务、独立文件数据库、Spring YAML 与方法入口，覆盖 10,000 行、断连与新 JVM 恢复。PostgreSQL 方言的 mock JDBC 测试不替代真实 PostgreSQL；真实驱动与业务数据需实际环境验收。认证、TLS、连接池及部署由宿主管理。
 
-## 表级核验与清理
+## 表级核验与人工重迁
 
-可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。
+可在每表 verification 中启用数量检查及内容抽检。核验不一致记录 VERIFICATION_MISMATCH，保留目标数据、成功批次和 data_complete=true；本轮失败，下次显式调用只重试核验，通过后才执行 sequence 并标记 SUCCEEDED。查询异常记录 VERIFICATION_ERROR，同样保留现场。组件不因核验失败清表或重置检查点；需要重迁时由宿主停止迁移后手动清理对应目标及任务审计，再用原 Runner 调用迁移。配置和人工重迁步骤见 [表级核验指南](table-verification.md)。

@@ -8,10 +8,10 @@
 | --- | --- | --- |
 | 尚未执行 | 启动一次迁移并等待结束，成功后返回句柄；失败向调用方抛异常 | 启动一次后台迁移，立即返回句柄 |
 | 正在执行 | 立即返回同一个句柄，不等待、不重复执行 | 立即返回同一个句柄，不重复执行 |
-| 已经成功 | 返回原成功句柄，不借连接、不重新执行 | 返回原成功句柄，不借连接、不重新执行 |
+| 上轮成功 | 创建新句柄，读取目标审计并等待结果 | 立即返回新句柄，后台读取目标审计 |
 | 上轮失败且清理已结束 | 创建新句柄，按审计恢复并等待结束 | 创建新句柄，后台按审计恢复 |
 
-**返回类型调整：** `MigrationService.migrate()` 和 `MigrationRunner.migrate()` 现在返回 `MigrationExecution`，不再直接返回 `MigrationResult`。同步首次调用仍保留异常传播语义。原来的 `migration.migrate().tables()` 需改用下面的完成结果接口；不能假设每次同步调用返回都代表完成，因为重复触发可能返回正在运行的句柄。
+**返回类型调整：** `MigrationService.migrate()` 和 `MigrationRunner.migrate()` 现在返回 `MigrationExecution`，不再直接返回 `MigrationResult`。同步发起新一轮时直接传播异常。原来的 `migration.migrate().tables()` 需改用下面的完成结果接口；不能假设每次同步调用返回都代表完成，因为重复触发可能返回正在运行的句柄。
 
 防重复只在同一个 Runner/Service 实例内合并触发。不同 Runner、不同 Spring Context 的并发执行仍受 JVM 全局互斥限制，冲突执行会失败，不会把另一个任务当作本次任务返回。不同进程之间没有协调，部署方仍须保证迁移不重叠。
 
@@ -46,7 +46,7 @@ public MigrationExecution triggerSync() {
 ```java
 MigrationExecution first = migration.migrateAsync();
 MigrationExecution again = migration.migrate();
-// 运行中或已成功时，first == again；不会创建第二轮迁移。
+// 运行中时，first == again；不会创建第二轮迁移。
 MigrationProgress progress = again.progress();
 ```
 
@@ -136,7 +136,7 @@ execution.completion().whenComplete((result, failure) -> {
 MigrationResult result = execution.completion().toCompletableFuture().join();
 ```
 
-`join()` 失败时抛 CompletionException，其 cause 为原始失败；其中 MigrationException 仍保留 result()。同步首次调用 migrate() 直接传播原异常。取消 completion() 派生出来的 Future 不会取消迁移；停止迁移使用 Runner.close()/关闭对应 Spring Service。同步首调线程被中断时，会请求终止本轮，等待清理并保留中断标志。
+`join()` 失败时抛 CompletionException，其 cause 为原始失败；其中 MigrationException 仍保留 result()。migrate() 发起新一轮时直接传播原异常。取消 completion() 派生出来的 Future 不会取消迁移；停止迁移使用 Runner.close()/关闭对应 Spring Service。等待新一轮完成的同步调用线程被中断时，会请求终止本轮，等待清理并保留中断标志。
 
 ## 失败恢复与重启
 
@@ -144,9 +144,11 @@ MigrationResult result = execution.completion().toCompletableFuture().join();
 
 自定义 MigrationEngine 仍使用内部同步 SPI，由后台入口调用；若未接入进度观察器，表级计数在引擎返回最终结果后更新。本文实时提交进度针对默认 JdbcMigrationEngine。
 
-## 表级核验与清理
+## 表级核验与人工重迁
 
-可在每表 verification 中启用数量检查及内容抽检。审计不加字段，新增 VERIFYING、VERIFICATION_ERROR、CLEANUP_PENDING、VERIFICATION_FAILED 状态；确认不一致后整表 DELETE 与当前任务检查点重置同事务提交，下一次显式调用从头重迁。网络和查询异常保留数据，只重试核验。核验通过后才执行 sequence 并标记 SUCCEEDED；已成功调用仍复用原结果。配置、删除范围、临时磁盘成本和恢复步骤见 [表级核验指南](table-verification.md)。
+新执行以目标审计为准。成功表直接返回审计结果，跳过源连接、业务数据核验和 sequence 校准。审计读取失败会报告本轮失败。持续查看当前轮进度时，使用已持有的 execution.progress()。
+
+可在每表 verification 中启用数量检查及内容抽检。核验不一致记录 VERIFICATION_MISMATCH，保留目标数据、成功批次和 data_complete=true；本轮失败，下次显式调用只重试核验，通过后才执行 sequence 并标记 SUCCEEDED。查询异常记录 VERIFICATION_ERROR，同样保留现场。组件不因核验失败清表或重置检查点；需要重迁时由宿主停止迁移后手动清理对应目标及任务审计，再用原 Runner 调用迁移。配置和人工重迁步骤见 [表级核验指南](table-verification.md)。
 
 ## 调用时自动打印进度
 

@@ -44,13 +44,34 @@ data-migration:
 
 ## 不一致后会发生什么
 
-**启用此功能即允许：确认数量或内容不一致时，删除整张目标表，包括迁移前已有的数据。请使用专用目标表。** APPEND_RESUME 不豁免这项核验清理规则；目标历史数据也计入总数。
+核验只检查并报告，不负责修复或删除业务数据。确认数量或内容不一致时，汇总行标记 `VERIFICATION_MISMATCH`，error_code 区分数量与内容错误；本轮迁移返回失败。目标数据、正数批次记录、计数以及 `prepared`、`data_complete`、`planning_complete` 保持原样。其他表仍按独立任务规则执行。
 
-先持久化 `CLEANUP_PENDING`，然后在同一个目标事务中执行普通 DELETE、删除当前 job/任务的正数批次检查点、重置汇总计数和阶段标志，最终保留汇总状态 `VERIFICATION_FAILED` 及原因。本次调用失败；不会自动无限重试或立即重迁。其他目标表不因该表失败被清空。
+下一次显式调用原 Runner/Service 的 migrate 或 migrateAsync，仅重新核验该表；不重新执行 INSERT、不再次执行 CLEAR_AND_REIMPORT 的准备清表，也不重置检查点。核验通过后继续 sequence 收尾，最后标记 SUCCEEDED。数据仍不一致时再次失败，不自动循环，不会因多次调用而反复清表重迁。新 JVM/Runner 也从目标审计读取相同阶段。
 
-下次显式调用原 Runner/Service 的 migrate 或 migrateAsync，会从头迁移失败表；重新创建 Runner/JVM 也依赖相同审计恢复。不要删除审计来触发重迁。其他历史 job 的审计不会改写，清表后这些历史记录不能用来证明当前目标数据仍然存在，不能再复用已完成的旧 job 做数据存在性检查。
+网络、超时、转换或临时文件等执行异常记录 `VERIFICATION_ERROR`；因为尚未确认数据不一致，也保留数据和检查点。核验失败状态写入审计再次失败时日志保留原始核验原因；已提交的 `data_complete=true` 仍使下次调用进入核验，而非重插数据。
 
-DELETE 不使用 TRUNCATE，也不添加 CASCADE；组件只对失败目标表发出 DELETE。数据库已有的外键级联、DELETE 触发器及权限仍遵循数据库行为，宿主应提前确认它们的影响。若约束或权限阻止清理，保留待清理状态和现场；修复后再调用。DELETE、检查点重置任一失败都回滚，不会只删数据却保留成功批次。提交响应丢失时依靠汇总状态确认是否已清理。
+日志报告 `Verification mismatch; preserving target data and checkpoints` 和安全错误码，不输出业务行、键值或摘要。再次调用的 INFO 进度保留已提交数量，同时用 VERIFICATION_MISMATCH 表明这些数据尚未通过核验，不能把 committedRows 达到总数当作迁移成功。
+
+## 人工决定重新迁移
+
+可选择先人工修复目标差异，然后直接再次调用原方法只重试核验。若认为需要从头重迁，由宿主管理删除：
+
+1. 等待当前迁移结束，并暂停触发新迁移；保证没有其他迁移进程操作该目标。
+2. 手动清理目标表，同时删除审计中对应 job_id + task_name 的**全部记录**，包括 batch_no=0 汇总和所有正数批次。只删除汇总而保留批次时，下一次调用会报 AUDIT_SUMMARY_MISSING。只清理业务数据时，已有成功审计仍会使该表跳过。
+3. 建议在同一个目标数据库事务中完成业务数据和对应审计的删除；确认权限、外键及触发器影响。共享审计表不要整体清空，以免影响其他表和其他 job。
+4. 用原 Runner 再次调用。它会重新读取审计，从空检查点开始迁移该表。其他仍有成功审计的任务会跳过。
+
+以下是人工操作示例，组件不会自动执行；替换为实际目标、job 和任务名：
+
+```sql
+BEGIN;
+DELETE FROM customer_copy;
+DELETE FROM migration_audit
+WHERE job_id = 'customer-import' AND task_name = 'customer';
+COMMIT;
+```
+
+旧句柄和其他 job 的成功审计只反映各自的历史执行结果。若同时调整 SQL 或映射，清理对应检查点后创建新 Runner 读取新配置。
 
 ## 审计状态与重试
 
@@ -59,13 +80,14 @@ DELETE 不使用 TRUNCATE，也不添加 CASCADE；组件只对失败目标表�
 | state | 含义 | 下次显式调用 |
 | --- | --- | --- |
 | VERIFYING | 数据已提交，正在核验 | 重新核验，再做 sequence 收尾 |
-| VERIFICATION_ERROR | 网络、超时、转换或临时文件等导致无法完成核验，尚未确认不一致 | 保留数据与批次，只重试核验及收尾 |
-| CLEANUP_PENDING | 已确认不一致，但清理未被确认成功 | 先清理并重置，再从头迁移 |
-| VERIFICATION_FAILED | 已确认不一致且整表已清理 | 从头规划和迁移 |
+| VERIFICATION_MISMATCH | 已确认数量或内容不一致，数据和成功批次保留 | 只重试核验，通过后继续收尾 |
+| VERIFICATION_ERROR | 核验执行异常，未确认数据错误，现场保留 | 只重试核验及收尾 |
 | FINALIZATION_FAILED | 核验通过后，sequence 等收尾失败 | 重新核验，再重试收尾，不重插数据 |
 | SUCCEEDED | 数据、核验和 sequence 均完成 | 直接返回已有结果，不再次核验 |
 
-确认不一致的错误码为 `VERIFICATION_COUNT_MISMATCH` 或 `VERIFICATION_CONTENT_MISMATCH`。网络/查询异常不会仅因无法核验就删除数据。日志及公开结果不含业务行、键值或摘要；通过 runId、任务名、阶段、安全错误码定位。异步宿主通过 execution.progress() 查看 VERIFYING、CLEANUP_PENDING 等状态，通过 completion() 接收最终失败。
+确认不一致的错误码仍为 `VERIFICATION_COUNT_MISMATCH` 或 `VERIFICATION_CONTENT_MISMATCH`。没有单独保存抽检比例或通过标志，SUCCEEDED 也可能来自未启用核验的任务，需要结合原配置判断。原本已成功的任务不会补做核验。
+
+旧版本的 `CLEANUP_PENDING`、`VERIFICATION_FAILED` 属于已移除的自动清理流程，不能解释为新版“数据已保留”。新版遇到它们会停止并返回 `LEGACY_VERIFICATION_RESET_REQUIRED`，保留原审计状态，不继续删除或自动重迁。人工检查旧版是否已经清表，然后按上面的重迁步骤成对清理目标及对应审计。
 
 查询审计示例：
 
@@ -75,5 +97,3 @@ SELECT job_id, task_name, state, error_code, total_rows,
 FROM migration_audit
 WHERE job_id = 'customer-import' AND batch_no = 0;
 ```
-
-原本已标记成功的任务不会补做核验；不要通过修改同 job 配置要求其重新核验。需要新迁移时安排新的 job，并明确目标数据处置。

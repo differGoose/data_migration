@@ -2,6 +2,9 @@ package com.datamigration.support;
 
 import static com.datamigration.support.MigrationAwait.await;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import com.datamigration.api.MigrationService;
 import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.JdbcValueConverter;
@@ -9,6 +12,7 @@ import com.datamigration.execution.JdbcMigrationEngine;
 import com.datamigration.jdbc.ConnectionAccess;
 import com.datamigration.properties.MigrationConfiguration;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.slf4j.LoggerFactory;
 import java.lang.reflect.*;
 import java.nio.file.*;
 import java.sql.*;
@@ -60,6 +64,19 @@ public final class H2RecoveryWorker {
                                 }
                             }))
                     .run(java.util.Arrays.copyOfRange(args,1,args.length))) {
+                if (mode.equals("after-sequence")) {
+                    Logger logger = (Logger) LoggerFactory.getLogger("com.datamigration");
+                    var crash = new AppenderBase<ILoggingEvent>() {
+                        @Override protected void append(ILoggingEvent event) {
+                            String message = event.getFormattedMessage();
+                            if (message.startsWith("Sequence finalization completed ") && message.endsWith("enabled=true")) {
+                                Runtime.getRuntime().halt(73);
+                            }
+                        }
+                    };
+                    crash.start();
+                    logger.addAppender(crash);
+                }
                 await(context.getBean(MigrationService.class));
             }
         }

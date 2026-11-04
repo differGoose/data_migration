@@ -20,7 +20,7 @@ public final class MigrationMonitor implements MigrationObserver {
     private String error;
     public UUID id() { return id; }
     public MigrationExecution execution() { return execution; }
-    public synchronized boolean reusable() { return status != MigrationProgress.Status.FAILED || !completion.isDone(); }
+    public synchronized boolean reusable() { return !completion.isDone(); }
     public synchronized MigrationProgress snapshot() {
         return new MigrationProgress(id, job, status, started, finished, new ArrayList<>(tables.values()), error);
     }

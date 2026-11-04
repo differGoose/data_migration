@@ -37,7 +37,7 @@ public class MigrationUtil {
         return owned;
     }
 
-    /** First invocation waits. A duplicate of a running/successful attempt returns its current handle. */
+    /** A new synchronous attempt waits. A duplicate of a running attempt returns its current handle. */
     public static MigrationExecution migrate() {
         return runner().migrate();
     }

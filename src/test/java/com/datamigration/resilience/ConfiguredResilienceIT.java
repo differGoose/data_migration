@@ -7,7 +7,10 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
-/** Opt-in only. Ordinary verify never connects to a DEV database. */
+/**
+ * Runs a recovery scenario against the environment selected by {@code resilience.config}.
+ * The test is enabled when that property is supplied.
+ */
 @EnabledIfSystemProperty(named = "resilience.config", matches = ".+")
 class ConfiguredResilienceIT {
     @Test void configuredEnvironmentRecovers() throws Exception {

@@ -42,7 +42,7 @@ public static void main(String[] args) {
 
 YAML 只描述迁移工作，完整例子见 [migration.yml](examples/migration.yml)。每张表使用独立 `tables[].batch-size`，默认 1000：有键表按该数量划分事务块、设置 fetch 提示及 JDBC batch 上限，单次调用持续迁移至完成。无键表仍为整表事务。
 
-同一 Runner/单例 Service 的 migrate() 与 migrateAsync() 共用防重复状态，运行中重复调用立即返回同一 MigrationExecution，可从 progress() 读取进度；成功后返回缓存句柄，失败后显式调用按审计续跑。同步首次调用等待完成，异步首次调用立即返回。不同 Runner / Spring Context 的执行仍受 JVM 全局互斥保护，冲突时失败。详见 [宿主执行入口](docs/host-execution.md)。迁移内部仍支持多表和批次并发。许可在事务和工作线程清理完毕后释放；部署方必须保证不同进程不会同时迁移。
+同一 Runner/单例 Service 的 migrate() 与 migrateAsync() 共用防重复状态，运行中重复调用立即返回同一 MigrationExecution，可从 progress() 读取进度；上一轮结束后再次调用会创建新句柄，按目标审计决定跳过或恢复。同步发起新一轮时等待完成，异步发起新一轮时立即返回。不同 Runner / Spring Context 的执行仍受 JVM 全局互斥保护，冲突时失败。详见 [宿主执行入口](docs/host-execution.md)。迁移内部仍支持多表和批次并发。许可在事务和工作线程清理完毕后释放；部署方必须保证不同进程不会同时迁移。
 
 ## 重复调用与恢复
 
@@ -68,4 +68,4 @@ Surefire 运行 `*Test`，Failsafe 运行本地 `*IT`；真实 DEV 需显式启�
 
 贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，变化见 [CHANGELOG.md](CHANGELOG.md)。
 
-每表可选数量核验和百分比内容抽检；确认不一致会删除整张目标表并保留审计失败状态，网络异常则保留现场。默认关闭，配置和恢复说明见 [表级核验](docs/table-verification.md)。
+每表可选数量核验和百分比内容抽检；确认不一致或查询异常都保留数据与检查点，显式重试只重新核验。需要重迁时由宿主停止迁移后人工清理目标及对应任务审计。默认关闭，配置和恢复说明见 [表级核验](docs/table-verification.md)。

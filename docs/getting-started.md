@@ -152,11 +152,11 @@ spring:
 
 ## 6. 再次调用和重启
 
-同一个 Runner 成功后返回原句柄；重启后以同配置新建 Runner，成功表从审计跳过。失败表恢复未完成块，序列收尾失败只重试收尾。保持 job-id、任务 name、实际数据源及全部迁移配置不变，不需要修改 YAML 来表示“我要恢复”。
+同一个 Runner 每轮结束后再次调用时重新读取目标审计，成功表直接跳过。失败表恢复未完成块，数据已提交但尚未成功的表从核验或收尾阶段继续。保持 job-id、任务 name、实际数据源及全部迁移配置不变，不需要修改 YAML 来表示“我要恢复”。
 
 配置首次绑定成功后缓存，不热更新。源库后来新增数据，也不会因为重复调用就自动同步。同 job 恢复不支持修改 batch-size 等迁移规则，组件不计算配置摘要来检测变化。
 
-migrate() 和 migrateAsync() 统一返回 MigrationExecution。同步首次调用等待完成并直接传播异常；异步通过 completion() 通知结果或异常。运行中交叉重复调用立即返回同一句柄，通过 progress() 读取进度，不再报重复触发错误。成功后返回缓存句柄，失败后显式调用按审计恢复。完整调用和返回类型迁移见 [宿主执行入口](host-execution.md)，故障处理见 [运维指南](operations.md)。
+migrate() 和 migrateAsync() 统一返回 MigrationExecution。同步发起新一轮时等待完成并直接传播异常；异步通过 completion() 通知结果或异常。运行中交叉重复调用立即返回同一句柄，通过 progress() 读取进度，不再报重复触发错误。上一轮结束后再次调用会创建新句柄，并重新读取目标审计。完整调用和返回类型迁移见 [宿主执行入口](host-execution.md)，故障处理见 [运维指南](operations.md)。
 
 可运行实例位于 [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java)，使用独立 H2 合成数据，无需真实账号。
 

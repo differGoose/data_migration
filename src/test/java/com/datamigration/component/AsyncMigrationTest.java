@@ -71,13 +71,56 @@ class AsyncMigrationTest {
                 assertThat(first.progress().status()).isEqualTo(MigrationProgress.Status.SUCCEEDED);
                 assertThat(first.progress().committedRows()).isEqualTo(23);
                 assertThat(snapshot.committedRows()).isEqualTo(7);
-                assertThat(migration.migrateAsync()).isSameAs(first);
-                assertThat(migration.migrate()).isSameAs(first);
+                var second = migration.migrateAsync();
+                assertThat(second).isNotSameAs(first);
+                assertThat(await(second).runId()).isNotEqualTo(result.runId());
+                assertThat(migration.migrate()).isNotSameAs(second);
                 assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(20);
                 assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no>0")).isEqualTo(4);
             } finally { release.countDown(); migration.close(); callers.shutdownNow(); }
         }
     }
+    @Test void sameRunnerRechecksAuditAndReimportsOnlyTheManuallyResetTable() throws Exception {
+        try (var db = new DatabaseFixture()) {
+            db.seed("A", 9);
+            db.seed("B", 3);
+            var source = spy(new DriverManagerDataSource(db.sourceUrl, "sa", ""));
+            try (var migration = runner(db, configuration("A", "B")).source(source, 4).build()) {
+                var first = migration.migrate();
+                clearInvocations(source);
+                var checked = migration.migrate();
+                assertThat(checked.progress().runId()).isNotEqualTo(first.progress().runId());
+                verify(source, never()).getConnection();
+
+                db.target("DELETE FROM A");
+                db.target("DELETE FROM migration_audit WHERE job_id='async-job' AND task_name='A'");
+                db.source("DROP TABLE B");
+                var restored = migration.migrate();
+                assertThat(restored.progress().status()).isEqualTo(MigrationProgress.Status.SUCCEEDED);
+                assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(9);
+                assertThat(db.scalar("SELECT COUNT(*) FROM B")).isEqualTo(3);
+                assertThat(first.progress().committedRows()).isEqualTo(12);
+            }
+        }
+    }
+
+    @Test void missingAuditOrSummaryFailsInsteadOfReturningCachedSuccess() throws Exception {
+        try (var db = new DatabaseFixture()) {
+            db.seed("A", 9);
+            try (var migration = runner(db, configuration("A")).build()) {
+                migration.migrate();
+                db.target("ALTER TABLE migration_audit RENAME TO backup_audit");
+                assertThatThrownBy(migration::migrate).isInstanceOf(MigrationException.class);
+                db.target("ALTER TABLE backup_audit RENAME TO migration_audit");
+                db.target("DELETE FROM migration_audit WHERE job_id='async-job' AND task_name='A' AND batch_no=0");
+                assertThatThrownBy(migration::migrate).isInstanceOf(MigrationException.class)
+                        .hasMessageContaining("AUDIT_SUMMARY_MISSING");
+                assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(9);
+                assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit")).isEqualTo(2);
+            }
+        }
+    }
+
     @Test void synchronousFirstWaitsButAsyncAndSyncDuplicatesReturnImmediately() throws Exception {
         try (var db = new DatabaseFixture()) {
             db.seed("A", 9);
@@ -217,7 +260,7 @@ class AsyncMigrationTest {
                         assertThat(service.migrateAsync()).isSameAs(first);
                         release.countDown(); await(first);
                         assertThat(first.progress().committedRows()).isEqualTo(10);
-                        assertThat(service.migrate()).isSameAs(first);
+                        assertThat(service.migrate()).isNotSameAs(first);
                     } finally { release.countDown(); }
                 });
         }

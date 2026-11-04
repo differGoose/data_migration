@@ -40,7 +40,7 @@ target-table 必须与 INSERT 的实际目标一致；只支持普通 table 或 
 
 `tables[].verification.enabled` 默认 false；开启后必须配置 `sample-percent`，范围为大于 0、至多 100，支持小数。每张表独立设置。先比较源查询、目标整表和审计数量，再按向上取整的样本数量随机比对迁移字段。开启要求公共 skip-limit=0，以及显式 INSERT 列清单和普通问号参数。
 
-**确认不一致会清空目标整张表，包含原有数据**，同时重置当前任务检查点，下次显式调用从头重迁。网络和查询异常保留现场，只重试核验。详细行为、审计状态及成本见 [表级核验](table-verification.md)。
+确认不一致记录 `VERIFICATION_MISMATCH`，保留全部数据和检查点；再次显式调用只重试核验，不重新 INSERT 或清表。网络和查询异常同样保留现场。人工决定重迁时先停止迁移，再清理目标表及对应任务全部审计记录后用原 Runner 调用迁移。详细行为、审计状态及成本见 [表级核验](table-verification.md)。
 
 ## 并发和连接容量
 
@@ -59,7 +59,7 @@ max-concurrent-tables 控制表并发，worker-count 控制单表块并发：
 
 自动模式支持HikariDataSource及其子类、Spring DelegatingDataSource包装链和支持标准JDBC unwrap的包装。未知池、路由包装无法确定实际目标、包装循环或无法读取正数上限时明确失败，不猜测、不默认跳过。宿主如使用无法识别的自定义/非池化DataSource，可继续选择 source(ds, capacity)/target(ds, capacity)，或注解的正数capacity；这是显式声明，不是自动读取。识别到Hikari池时，显式声明也不能掩盖更小的实际池上限。
 
-自动检查只验证配置上限，不保证共享业务池当时的空闲连接数。宿主仍需为业务留出余量或使用专用迁移池；有共享池迁移额度时，可通过可选显式capacity限制预算。已成功的同实例重复调用仍只返回原句柄，不重新检查池或重跑迁移。
+自动检查只验证配置上限，不保证共享业务池当时的空闲连接数。宿主仍需为业务留出余量或使用专用迁移池；有共享池迁移额度时，可通过可选显式capacity限制预算。上一轮结束后再次调用会执行容量预检并读取目标审计，已成功的表跳过源库访问。
 
 宿主负责池借用超时、JDBC 连接和读超时、连接回收及动态凭据。Runner 不关闭数据源。连接借出后设为 autoCommit=false、READ_COMMITTED，结束未完成事务后恢复原 autoCommit/隔离级别并归还。请提供干净的独立连接，不要包装正在使用的业务事务 Connection。
 

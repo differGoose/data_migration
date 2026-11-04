@@ -50,7 +50,8 @@ public final class MigrationLog {
             "verification requires explicit INSERT columns and one plain ? per field",
             "verification requires data-migration.strategy.skip-limit=0",
             "verification target must differ from audit table", "Verification temporary storage failed",
-            "Unsupported verification binary representation", "Verification interrupted", "Verification cleanup interrupted");
+            "Unsupported verification binary representation", "Verification interrupted", "Legacy verification cleanup state requires manual reset",
+            "Migration audit summary is missing while batch checkpoints remain; inspect the task audit");
 
     private MigrationLog() { }
 

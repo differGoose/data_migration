@@ -75,7 +75,7 @@ class MigrationLoggingTest {
                 assertThat(messages()).doesNotContain("Batch started", "Batch committed", "Borrowing host connection", "row-1");
                 assertThat(events).allSatisfy(event -> assertThat(event.getFormattedMessage()).contains("runId=" + result.runId()));
                 await(migration);
-                assertThat(messages()).contains("Migration already succeeded; returning existing result");
+                assertThat(messages()).contains("Table already succeeded; reusing audited result");
             }
         }
     }

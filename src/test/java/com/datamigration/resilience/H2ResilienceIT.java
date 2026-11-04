@@ -7,6 +7,10 @@ import java.util.UUID;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+/**
+ * Runs the shared recovery suite against H2 for source and target network outages
+ * and process exits immediately before or after a batch commit.
+ */
 class H2ResilienceIT {
     @ParameterizedTest(name = "{0}")
     @EnumSource(ResilienceSettings.Scenario.class)

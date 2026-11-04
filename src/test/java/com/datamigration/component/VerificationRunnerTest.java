@@ -38,7 +38,7 @@ class VerificationRunnerTest {
         assertThatThrownBy(() -> new MigrationConfiguration(configuration()
                 .withProperty("data-migration.strategy.skip-limit", "1")).get()).isInstanceOf(RuntimeException.class);
     }
-    @Test void publicSyncAndAsyncDeduplicateDuringVerificationAndRetryAfterCleanup() throws Exception {
+    @Test void publicSyncAndAsyncDeduplicateDuringVerificationAndOnlyReverifyAfterMismatch() throws Exception {
         try (var db = new DatabaseFixture()) {
             db.seed("A",4);
             var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
@@ -58,15 +58,40 @@ class VerificationRunnerTest {
                     assertThat(runner.migrateAsync()).isSameAs(execution);
                     db.target("UPDATE A SET NAME='bad'"); release.countDown();
                     assertThatThrownBy(() -> execution.completion().toCompletableFuture().get(5,TimeUnit.SECONDS)).isInstanceOf(ExecutionException.class);
-                    assertThat(execution.progress().tables().get(0).state()).isEqualTo("VERIFICATION_FAILED");
-                    assertThat(execution.progress().committedRows()).isZero();
-                    assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
+                    assertThat(execution.progress().tables().get(0).state()).isEqualTo("VERIFICATION_MISMATCH");
+                    assertThat(execution.progress().committedRows()).isEqualTo(4);
+                    assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(4);
+                    assertThatThrownBy(runner::migrate).isInstanceOf(MigrationException.class);
+                    db.target("UPDATE A SET NAME='row-' || ID");
                     var retry = runner.migrate();
                     assertThat(retry).isNotSameAs(execution);
                     assertThat(retry.progress().status()).isEqualTo(MigrationProgress.Status.SUCCEEDED);
-                    assertThat(runner.migrateAsync()).isSameAs(retry);
+                    var checked = runner.migrateAsync();
+                    assertThat(checked).isNotSameAs(retry);
+                    checked.completion().toCompletableFuture().get(5,TimeUnit.SECONDS);
                 } finally { release.countDown(); }
             }
+        }
+    }
+    @Test void hostCanManuallyResetTargetAndTaskAuditThenMigrateWithNewRunner() throws Exception {
+        try (var db = new DatabaseFixture()) {
+            db.seed("A",4); db.target("INSERT INTO A VALUES(999,'old')");
+            var host = new AsyncMigrationTest(); var env = configuration();
+            try (var runner = host.runner(db,env).build()) {
+                assertThatThrownBy(runner::migrate).isInstanceOf(MigrationException.class);
+                assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(5);
+                assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no=0 AND state='VERIFICATION_MISMATCH'")).isEqualTo(1);
+            }
+            // Only the host/test fixture performs this reset, after the previous Runner is closed.
+            try (var connection = db.openTargetConnection(); var statement = connection.createStatement()) {
+                statement.executeUpdate("DELETE FROM A");
+                statement.executeUpdate("DELETE FROM migration_audit WHERE job_id='async-job' AND task_name='A'");
+                connection.commit();
+            }
+            try (var runner = host.runner(db,env).build()) {
+                assertThat(runner.migrate().progress().status()).isEqualTo(MigrationProgress.Status.SUCCEEDED);
+            }
+            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(4);
         }
     }
 }

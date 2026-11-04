@@ -11,7 +11,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.annotation.*;
 import static org.assertj.core.api.Assertions.*;
 
-/** Exercises the DEV path with manually prepared local servers; never claims Oracle/PG acceptance. */
+/**
+ * Uses local H2 to exercise the DEV harness with caller-provided data sources,
+ * covering target outage recovery and repeated calls against the same prepared databases.
+ */
 class DevHarnessContractIT {
     @TempDir Path directory;
     @Configuration(proxyBeanMethods = false)

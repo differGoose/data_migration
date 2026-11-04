@@ -152,18 +152,17 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
         CheckpointStore store = new CheckpointStore(plan.strategy().auditTableName(), plan.jobId(), task.name());
         boolean finalizedData = false;
         boolean checkpointValidated = false;
+        boolean legacyVerificationState = false;
+        boolean missingSummary = false;
         String verificationFailure = null;
         String verificationCode = null;
-        try (Connection control = targetConnection();
-             Connection source = sourceConnection()) {
+        try (Connection control = targetConnection()) {
             try {
                 MigrationLog.stage("AUDIT_CHECK", "target", "data-migration.strategy.audit.table-name");
                 DatabaseDialect dialect = DatabaseDialect.target(control);
                 MigrationLog.info("Checking audit schema", "");
                 store.check(control);
                 MigrationLog.info("Audit schema check succeeded", "");
-                String query = SqlSupport.query(task);
-                String canonicalTarget = dialect.canonicalTable(control, task.targetTable());
                 MigrationLog.stage("CHECKPOINT_READ", "target", "data-migration.strategy.audit.table-name");
                 Checkpoint summary = store.find(control, 0, false);
                 checkpointValidated = true;
@@ -172,147 +171,123 @@ public final class JdbcMigrationEngine implements MigrationEngine, AutoCloseable
                     MigrationLog.info("Table already succeeded; reusing audited result", "");
                     return result(task, start, summary, TableResult.Status.SUCCEEDED, null);
                 }
-                if (summary != null && summary.state().equals("CLEANUP_PENDING")) {
-                    verificationFailure = "CLEANUP_PENDING";
-                    verificationCode = store.failureCode(control);
-                    cleanupVerification(control, task, store, verificationCode);
-                    verificationFailure = null; verificationCode = null;
+                if (summary != null && (summary.state().equals("CLEANUP_PENDING") || summary.state().equals("VERIFICATION_FAILED"))) {
+                    legacyVerificationState = true;
+                    throw new IllegalStateException("Legacy verification cleanup state requires manual reset");
+                }
+                if (summary == null && store.last(control) != null) {
+                    missingSummary = true;
+                    throw new IllegalStateException("Migration audit summary is missing while batch checkpoints remain; inspect the task audit");
+                }
+                String query = SqlSupport.query(task);
+                String canonicalTarget = dialect.canonicalTable(control, task.targetTable());
+                try (Connection source = sourceConnection()) {
+                    if (summary != null) MigrationLog.info("Resuming unfinished table", "dataComplete=" + summary.dataComplete());
+                    List<String> keys = summary != null && summary.dataComplete() ? List.of() : preflight(source, control, query, task);
+                    MigrationLog.info(summary != null && summary.dataComplete()
+                            ? "Data already committed; retrying verification and finalization only" : "Table preflight succeeded", "");
+                    MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name");
+                    if (summary == null) {
+                        store.create(control, 0, canonicalTarget, null, null, 0);
+                        MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
+                    }
                     summary = store.find(control, 0, false);
-                    observer.restored(task.name(), summary);
-                }
-                if (summary != null) MigrationLog.info("Resuming unfinished table", "dataComplete=" + summary.dataComplete());
-                List<String> keys = preflight(source, control, query, task);
-                MigrationLog.info("Table preflight succeeded", "");
-                MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name");
-                if (summary == null) {
-                    store.create(control, 0, canonicalTarget, null, null, 0);
-                    MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
-                }
-                summary = store.find(control, 0, false);
-                finalizedData = summary.dataComplete();
-                if (!finalizedData) {
-                    MigrationLog.stage("SOURCE_COUNT", "source", "select-sql");
-                    MigrationLog.info("Counting source rows", "");
-                    long total = count(source, query);
-                    observer.counted(task.name(), total);
-                    MigrationLog.info("Source row count checked", "rows=" + total);
-                    // Keep preparation and optional DELETE in the summary transaction.
-                    summary = store.find(control, 0, true);
-                    if (summary.prepared() && total != summary.total()) throw new IllegalArgumentException("Source row count changed");
-                    if (task.keyed()) {
-                        if (!summary.prepared()) {
-                            if (task.mode() == TableTask.Mode.CLEAR_AND_REIMPORT) clear(control, task);
-                            store.prepared(control, total);
-                        }
-                        MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
-                        MigrationLog.stage("BATCH_EXECUTION", "-", "batch-size");
-                        MigrationLog.info("Table data transfer started", "");
-                        keyed(plan, task, query, keys, source, control, store, canonicalTarget);
-                        store.find(control, 0, true);
-                        MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name");
-                        store.reconcile(control);
-                        Checkpoint done = store.find(control, 0, false);
-                        if (done.committed() + done.skipped() != total)
-                            throw new SQLException("Planned count differs from source count", "P0004");
-                        store.dataComplete(control);
-                        MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
-                    } else {
-                        source.close(); // Reuse the source pool slot for the single keyless worker.
-                        if (store.find(control, 1, false) == null) {
-                            store.create(control, 1, canonicalTarget, null, null, total);
-                            store.prepared(control, total);
-                        }
-                        MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
-                        MigrationLog.info("Keyless whole-table data transfer started", "");
-                        transfer(plan, task, query, keys, store.find(control, 1, false), store, control);
-                        store.find(control, 0, true);
-                        store.dataComplete(control);
-                        MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
-                    }
-                    finalizedData = true;
-                    MigrationLog.info("Table data committed", "");
-                }
-                if (task.verification().enabled()) {
-                    verificationFailure = "VERIFICATION_ERROR";
-                    MigrationLog.stage("VERIFICATION_START", "-", "verification");
-                    store.state(control, 0, "VERIFYING"); control.commit();
-                    observer.phase(task.name(), "VERIFYING");
-                    try {
-                        Checkpoint completed = store.find(control, 0, false);
-                        if (source.isClosed()) {
-                            try (Connection verificationSource = sourceConnection()) {
-                                verifier.verify(verificationSource, control, query, task, completed.committed());
+                    finalizedData = summary.dataComplete();
+                    if (!finalizedData) {
+                        MigrationLog.stage("SOURCE_COUNT", "source", "select-sql");
+                        MigrationLog.info("Counting source rows", "");
+                        long total = count(source, query);
+                        observer.counted(task.name(), total);
+                        MigrationLog.info("Source row count checked", "rows=" + total);
+                        // Keep preparation and optional DELETE in the summary transaction.
+                        summary = store.find(control, 0, true);
+                        if (summary.prepared() && total != summary.total()) throw new IllegalArgumentException("Source row count changed");
+                        if (task.keyed()) {
+                            if (!summary.prepared()) {
+                                if (task.mode() == TableTask.Mode.CLEAR_AND_REIMPORT) clear(control, task);
+                                store.prepared(control, total);
                             }
-                        } else verifier.verify(source, control, query, task, completed.committed());
-                        control.commit();
-                        verificationFailure = null;
-                    } catch (VerificationMismatch mismatch) {
-                        MigrationLog.remember(mismatch);
-                        verificationCode = mismatch.code();
-                        // No destructive action until the intent is durable. Recovery must never use old batches.
-                        control.rollback();
-                        verificationFailure = "CLEANUP_PENDING";
-                        store.failure(control, 0, "CLEANUP_PENDING", verificationCode); control.commit();
-                        cleanupVerification(control, task, store, verificationCode);
-                        verificationFailure = "VERIFICATION_FAILED";
-                        throw mismatch;
+                            MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
+                            MigrationLog.stage("BATCH_EXECUTION", "-", "batch-size");
+                            MigrationLog.info("Table data transfer started", "");
+                            keyed(plan, task, query, keys, source, control, store, canonicalTarget);
+                            store.find(control, 0, true);
+                            MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name");
+                            store.reconcile(control);
+                            Checkpoint done = store.find(control, 0, false);
+                            if (done.committed() + done.skipped() != total)
+                                throw new SQLException("Planned count differs from source count", "P0004");
+                            store.dataComplete(control);
+                            MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
+                        } else {
+                            source.close(); // Reuse the source pool slot for the single keyless worker.
+                            if (store.find(control, 1, false) == null) {
+                                store.create(control, 1, canonicalTarget, null, null, total);
+                                store.prepared(control, total);
+                            }
+                            MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
+                            MigrationLog.info("Keyless whole-table data transfer started", "");
+                            transfer(plan, task, query, keys, store.find(control, 1, false), store, control);
+                            store.find(control, 0, true);
+                            store.dataComplete(control);
+                            MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
+                        }
+                        finalizedData = true;
+                        MigrationLog.info("Table data committed", "");
                     }
+                    if (task.verification().enabled()) {
+                        verificationFailure = "VERIFICATION_ERROR";
+                        MigrationLog.stage("VERIFICATION_START", "-", "verification");
+                        store.state(control, 0, "VERIFYING"); control.commit();
+                        observer.phase(task.name(), "VERIFYING");
+                        try {
+                            Checkpoint completed = store.find(control, 0, false);
+                            if (source.isClosed()) {
+                                try (Connection verificationSource = sourceConnection()) {
+                                    verifier.verify(verificationSource, control, query, task, completed.committed());
+                                }
+                            } else verifier.verify(source, control, query, task, completed.committed());
+                            control.commit();
+                            verificationFailure = null;
+                        } catch (VerificationMismatch mismatch) {
+                            MigrationLog.remember(mismatch);
+                            verificationCode = mismatch.code();
+                            verificationFailure = "VERIFICATION_MISMATCH";
+                            MigrationLog.warn("Verification mismatch; preserving target data and checkpoints", "reason=" + verificationCode);
+                            throw mismatch;
+                        }
+                    }
+                    observer.finalizing(task.name());
+                    MigrationLog.stage("SEQUENCE_FINALIZE", "target", "sequence");
+                    store.find(control, 0, true);
+                    MigrationLog.info("Sequence finalization started", "enabled=" + task.sequence().enabled());
+                    dialect.calibrate(control, task.targetTable(), task.sequence());
+                    MigrationLog.info("Sequence finalization completed", "enabled=" + task.sequence().enabled());
+                    MigrationLog.stage("AUDIT_FINALIZE", "target", "data-migration.strategy.audit.table-name");
+                    // H2 ALTER SEQUENCE and PostgreSQL setval are not rollbackable, but neither
+                    // commits this transaction. Retain the summary lock through the final status.
+                    store.state(control, 0, "SUCCEEDED");
+                    MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
+                    return result(task, start, store.find(control, 0, false), TableResult.Status.SUCCEEDED, null);
                 }
-                observer.finalizing(task.name());
-                MigrationLog.stage("SEQUENCE_FINALIZE", "target", "sequence");
-                store.find(control, 0, true);
-                MigrationLog.info("Sequence finalization started", "enabled=" + task.sequence().enabled());
-                dialect.calibrate(control, task.targetTable(), task.sequence());
-                MigrationLog.info("Sequence finalization completed", "enabled=" + task.sequence().enabled());
-                MigrationLog.stage("AUDIT_FINALIZE", "target", "data-migration.strategy.audit.table-name");
-                // H2 ALTER SEQUENCE and PostgreSQL setval are not rollbackable, but neither
-                // commits this transaction. Retain the summary lock through the final status.
-                store.state(control, 0, "SUCCEEDED");
-                MigrationLog.stage("AUDIT_UPDATE", "target", "data-migration.strategy.audit.table-name"); control.commit();
-                return result(task, start, store.find(control, 0, false), TableResult.Status.SUCCEEDED, null);
             } catch (Exception failure) { MigrationLog.remember(failure); throw failure; }
         } catch (Exception exception) {
             MigrationLog.error("Table migration failed", exception);
             String state = verificationFailure != null ? verificationFailure : exception instanceof CommitUnknownException ? "COMMIT_UNKNOWN" :
                     finalizedData ? "FINALIZATION_FAILED" : "FAILED";
-            String error = verificationCode != null ? verificationCode : exception instanceof IllegalArgumentException ? "INVALID_CONFIGURATION_OR_MAPPING" : SqlErrors.summary(exception);
+            String error = missingSummary ? "AUDIT_SUMMARY_MISSING" : legacyVerificationState ? "LEGACY_VERIFICATION_RESET_REQUIRED" : verificationCode != null ? verificationCode : exception instanceof IllegalArgumentException ? "INVALID_CONFIGURATION_OR_MAPPING" : SqlErrors.summary(exception);
             Checkpoint summary = null;
             MigrationLog.stage("AUDIT_FAILURE_REPORT", "target", "data-migration.strategy.audit.table-name");
             try (Connection report = targetConnection()) {
                 summary = store.find(report, 0, false);
                 if (checkpointValidated && summary != null) {
                     summary = store.find(report, 0, true);
-                    if (verificationFailure != null && (summary.state().equals("CLEANUP_PENDING") || summary.state().equals("VERIFICATION_FAILED"))) {
-                        state = summary.state();
-                        error = store.failureCode(report);
-                    }
-                    if (!summary.succeeded()) { store.failure(report, 0, state, error); report.commit(); }
+                    if (!summary.succeeded() && !legacyVerificationState) { store.failure(report, 0, state, error); report.commit(); }
                 }
             } catch (Exception reportFailure) {
                 MigrationLog.secondary("Could not persist table failure; original error retained", reportFailure);
             }
             return result(task, start, summary, TableResult.Status.valueOf(state), error);
-        }
-    }
-
-    private void cleanupVerification(Connection target, TableTask task, CheckpointStore store, String code) throws SQLException {
-        MigrationLog.stage("VERIFICATION_CLEANUP", "target", "verification");
-        observer.phase(task.name(), "CLEANUP_PENDING");
-        MigrationLog.info("Verification cleanup started", "");
-        try {
-            store.find(target, 0, true);
-            if (Thread.currentThread().isInterrupted()) throw new SQLException("Verification cleanup interrupted", "57014");
-            try (var statement = CheckpointStore.statement(target, "DELETE FROM " + SqlSupport.table(task.targetTable()))) {
-                statement.executeUpdate();
-            }
-            store.verificationCleared(target, code);
-            MigrationLog.stage("VERIFICATION_CLEANUP_COMMIT", "target", "verification");
-            target.commit();
-            MigrationLog.info("Verification cleanup completed", "");
-        } catch (SQLException | RuntimeException failure) {
-            MigrationLog.secondary("Verification cleanup failed; durable summary determines recovery", failure);
-            try { target.rollback(); } catch (SQLException rollback) { MigrationLog.secondary("Verification cleanup rollback failed", rollback); }
-            throw failure;
         }
     }
 

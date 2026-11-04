@@ -49,58 +49,65 @@ class TableVerificationTest {
             assertThatThrownBy(() -> new VerificationSpec(true, new BigDecimal(percent))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new VerificationSpec(true, null)).isInstanceOf(IllegalArgumentException.class);
     }
-    @Test void contentMismatchClearsOnlyFailedTableAndRestartsAllBatches() throws Exception {
+    @Test void contentMismatchPreservesDataAndCheckpointsAndOnlyReverifies() throws Exception {
         try (var db = new DatabaseFixture(); var engine = db.engine()) {
-            db.seed("A", 45); db.seed("B", 10);
-            var plan = db.plan(verified(db.task("A"), "100", true), db.task("B"));
-            var failed = catchThrowableOfType(() -> engine.execute(plan, mutate(db, "UPDATE A SET NAME='changed'")), MigrationException.class);
-            assertThat(failed.result().tables().get(0).status()).isEqualTo(TableResult.Status.VERIFICATION_FAILED);
+            db.seed("A",45); db.seed("B",10);
+            var plan = db.plan(verified(db.task("A"),"100",true),db.task("B"));
+            var failed = catchThrowableOfType(() -> engine.execute(plan,mutate(db,"UPDATE A SET NAME='changed'")),MigrationException.class);
+            assertThat(failed.result().tables().get(0).status()).isEqualTo(TableResult.Status.VERIFICATION_MISMATCH);
             assertThat(failed.result().tables().get(0).sanitizedError()).isEqualTo("VERIFICATION_CONTENT_MISMATCH");
-            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
+            assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE NAME='changed'")).isEqualTo(45);
             assertThat(db.scalar("SELECT COUNT(*) FROM B")).isEqualTo(10);
-            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE task_name='A' AND batch_no>0")).isZero();
-            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE task_name='A' AND state='VERIFICATION_FAILED' AND prepared=FALSE AND data_complete=FALSE AND committed_rows=0")).isEqualTo(1);
-            // New engine simulates loss of all in-memory state.
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE task_name='A' AND batch_no>0 AND state='SUCCEEDED'")).isEqualTo(3);
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE task_name='A' AND batch_no=0 AND state='VERIFICATION_MISMATCH' AND prepared=TRUE AND data_complete=TRUE AND committed_rows=45")).isEqualTo(1);
+            assertThatThrownBy(() -> engine.execute(plan)).isInstanceOf(MigrationException.class);
+            assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE NAME='changed'")).isEqualTo(45);
+            db.target("UPDATE A SET NAME='row-' || ID");
             try (var restarted = db.engine()) { restarted.execute(plan); }
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(45);
             assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE task_name='A' AND batch_no>0")).isEqualTo(3);
         }
     }
-    @Test void countMismatchAlsoDeletesPreexistingTargetRows() throws Exception {
+
+
+    @Test void countMismatchPreservesPreexistingRowsUntilManualRepair() throws Exception {
         try (var db = new DatabaseFixture(); var engine = db.engine()) {
-            db.seed("A", 2); db.target("INSERT INTO A VALUES(999,'old')");
-            var plan = db.plan(verified(db.task("A"), "100", true));
-            var failed = catchThrowableOfType(() -> engine.execute(plan), MigrationException.class);
-            assertThat(failed.result().tables().get(0).sanitizedError()).isEqualTo("VERIFICATION_COUNT_MISMATCH");
-            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
+            db.seed("A",2); db.target("INSERT INTO A VALUES(999,'old')");
+            var plan = db.plan(verified(db.task("A"),"100",true));
+            for (int attempt=0; attempt<2; attempt++) {
+                var failed = catchThrowableOfType(() -> engine.execute(plan),MigrationException.class);
+                assertThat(failed.result().tables().get(0).sanitizedError()).isEqualTo("VERIFICATION_COUNT_MISMATCH");
+                assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(3);
+                assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE ID=999")).isEqualTo(1);
+            }
+            db.target("DELETE FROM A WHERE ID=999");
             engine.execute(plan);
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(2);
         }
     }
-    @Test void failedDeleteAndAuditResetRollBackTogetherAndRetryCleanupFirst() throws Exception {
+
+
+    @ParameterizedTest @ValueSource(booleans = {true,false})
+    void reimportModeDoesNotClearCommittedDataOnVerificationRetry(boolean keyed) throws Exception {
         try (var db = new DatabaseFixture(); var engine = db.engine()) {
-            db.seed("A", 25);
-            db.target("ALTER TABLE migration_audit ADD CONSTRAINT reject_reset CHECK(state<>'VERIFICATION_FAILED')");
-            var plan = db.plan(verified(db.task("A"), "100", false));
-            var failed = catchThrowableOfType(() -> engine.execute(plan, mutate(db, "UPDATE A SET NAME='bad'")), MigrationException.class);
-            assertThat(failed.result().tables().get(0).status()).isEqualTo(TableResult.Status.CLEANUP_PENDING);
-            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(25);
-            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no=1")).isEqualTo(1);
-            db.target("ALTER TABLE migration_audit DROP CONSTRAINT reject_reset");
+            db.seed("A",25);
+            var base = verified(db.task("A"),"100",keyed);
+            var task = new TableTask(base.name(),base.selectSql(),base.insertSql(),base.fields(),base.targetTable(),base.primaryKey(),
+                    base.workerCount(),TableTask.Mode.CLEAR_AND_REIMPORT,base.sequence(),base.batchSize(),base.verification());
+            var plan = db.plan(task);
+            assertThatThrownBy(() -> engine.execute(plan,mutate(db,"UPDATE A SET NAME='bad'"))).isInstanceOf(MigrationException.class);
+            assertThatThrownBy(() -> engine.execute(plan)).isInstanceOf(MigrationException.class);
+            assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE NAME='bad'")).isEqualTo(25);
+            db.target("UPDATE A SET NAME='row-' || ID");
             var progress = new MigrationMonitor(); progress.plan(plan);
-            var observed = new MigrationObserver() {
-                @Override public void restored(String task, com.datamigration.audit.Checkpoint summary) { progress.restored(task, summary); }
-                @Override public void counted(String task, long total) { progress.counted(task,total); }
-                @Override public void committed(String task, long batch, long written, long skipped) {
-                    progress.committed(task,batch,written,skipped);
-                    assertThat(progress.snapshot().committedRows()).isEqualTo(25);
-                }
-            };
-            try (var restarted = db.engine()) { restarted.execute(plan,observed); }
-            assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE NAME='bad'")).isZero();
+            engine.execute(plan,progress);
+            assertThat(progress.snapshot().committedRows()).isEqualTo(25);
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(25);
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no>0")).isEqualTo(keyed ? 2 : 1);
         }
     }
+
+
     @Test void queryTimeoutRetainsDataAndOnlyRetriesFinalization() throws Exception {
         try (var db = new DatabaseFixture()) {
             db.seed("A", 25);
@@ -160,20 +167,19 @@ class TableVerificationTest {
             assertThat(db.scalar("SELECT COUNT(*) FROM A")).isZero();
         }
     }
-    @ParameterizedTest @ValueSource(booleans = {true, false})
-    void cleanupCommitResponseLossUsesDurableSummaryToChooseRecovery(boolean committed) throws Exception {
+    @ParameterizedTest @ValueSource(booleans = {true,false})
+    void mismatchReportCommitResponseLossNeverDeletesDataOrReplaysBatches(boolean committed) throws Exception {
         try (var db = new DatabaseFixture()) {
-            db.seed("A", 25);
-            AtomicBoolean fired = new AtomicBoolean();
+            db.seed("A",25); AtomicBoolean fired = new AtomicBoolean();
             ConnectionAccess access = new ConnectionAccess() {
                 public Connection openSourceConnection() throws SQLException { return db.openSourceConnection(); }
                 public Connection openTargetConnection() throws SQLException {
-                    Connection real = db.openTargetConnection(); AtomicBoolean cleanup = new AtomicBoolean();
-                    return proxy(Connection.class, real, (method,args) -> {
-                        if (method.getName().equals("prepareStatement") && args[0].equals("DELETE FROM A")) cleanup.set(true);
-                        if (method.getName().equals("commit") && cleanup.get() && fired.compareAndSet(false,true)) {
+                    Connection real = db.openTargetConnection(); AtomicBoolean report = new AtomicBoolean();
+                    return proxy(Connection.class,real,(method,args) -> {
+                        if (method.getName().equals("prepareStatement") && args[0].toString().contains("state=?,error_code=?")) report.set(true);
+                        if (method.getName().equals("commit") && report.get() && fired.compareAndSet(false,true)) {
                             if (committed) real.commit(); else real.rollback();
-                            throw new SQLTransientConnectionException("secret response lost", "08006");
+                            throw new SQLTransientConnectionException("secret response lost","08006");
                         }
                         return invoke(real,method,args);
                     });
@@ -182,25 +188,47 @@ class TableVerificationTest {
             var plan = db.plan(verified(db.task("A"),"100",true));
             try (var engine = db.engine(access)) {
                 var failure = catchThrowableOfType(() -> engine.execute(plan,mutate(db,"UPDATE A SET NAME='bad'")),MigrationException.class);
-                assertThat(failure.result().tables().get(0).status()).isEqualTo(committed ? TableResult.Status.VERIFICATION_FAILED : TableResult.Status.CLEANUP_PENDING);
-                assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(committed ? 0 : 25);
+                assertThat(failure.result().tables().get(0).status()).isEqualTo(TableResult.Status.VERIFICATION_MISMATCH);
+                assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE NAME='bad'")).isEqualTo(25);
             }
+            assertThat(fired).isTrue();
+            db.target("UPDATE A SET NAME='row-' || ID");
             try (var restarted = db.engine()) { restarted.execute(plan); }
-            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(25);
-            assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE NAME='bad'")).isZero();
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no>0")).isEqualTo(2);
         }
     }
-    @Test void cleanupIntentMustBeDurableBeforeDeletingRows() throws Exception {
+
+
+    @Test void failedMismatchAuditWriteRetainsDataAndOriginalReason() throws Exception {
         try (var db = new DatabaseFixture(); var engine = db.engine()) {
-            db.seed("A", 3);
-            db.target("ALTER TABLE migration_audit ADD CONSTRAINT no_intent CHECK(state<>'CLEANUP_PENDING')");
+            db.seed("A",3);
+            db.target("ALTER TABLE migration_audit ADD CONSTRAINT reject_mismatch CHECK(state<>'VERIFICATION_MISMATCH')");
             var plan = db.plan(verified(db.task("A"),"100",true));
-            assertThatThrownBy(() -> engine.execute(plan,mutate(db,"UPDATE A SET NAME='bad'"))).isInstanceOf(MigrationException.class);
-            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(3);
+            var failure = catchThrowableOfType(() -> engine.execute(plan,mutate(db,"UPDATE A SET NAME='bad'")),MigrationException.class);
+            assertThat(failure.result().tables().get(0).sanitizedError()).isEqualTo("VERIFICATION_CONTENT_MISMATCH");
+            assertThat(db.scalar("SELECT COUNT(*) FROM A WHERE NAME='bad'")).isEqualTo(3);
             assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no>0 AND state='SUCCEEDED'")).isEqualTo(1);
-            db.target("ALTER TABLE migration_audit DROP CONSTRAINT no_intent");
+            db.target("ALTER TABLE migration_audit DROP CONSTRAINT reject_mismatch");
+            db.target("UPDATE A SET NAME='row-' || ID"); engine.execute(plan);
         }
     }
+    @ParameterizedTest @ValueSource(strings = {"CLEANUP_PENDING","VERIFICATION_FAILED"})
+    void legacyCleanupStatesRequireManualResetAndNeverModifyData(String legacy) throws Exception {
+        try (var db = new DatabaseFixture(); var engine = db.engine()) {
+            db.seed("A",3); var plan = db.plan(verified(db.task("A"),"100",true)); engine.execute(plan);
+            db.target("UPDATE migration_audit SET state='"+legacy+"', error_code='VERIFICATION_CONTENT_MISMATCH' WHERE batch_no=0");
+            var failure = catchThrowableOfType(() -> engine.execute(plan),MigrationException.class);
+            assertThat(failure.result().tables().get(0).sanitizedError()).isEqualTo("LEGACY_VERIFICATION_RESET_REQUIRED");
+            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(3);
+            assertThat(db.scalar("SELECT COUNT(*) FROM migration_audit WHERE batch_no=0 AND state='"+legacy+"'")).isEqualTo(1);
+            // Host explicitly resets its synthetic fixture, then the unchanged job migrates afresh.
+            db.target("DELETE FROM A"); db.target("DELETE FROM migration_audit WHERE job_id='job' AND task_name='A'");
+            engine.execute(plan);
+            assertThat(db.scalar("SELECT COUNT(*) FROM A")).isEqualTo(3);
+        }
+    }
+
+
     @ParameterizedTest @ValueSource(booleans = {true, false})
     void compositeKeysAndKeylessVerificationFinishAtMinimumConnectionBudget(boolean keyed) throws Exception {
         try (var db = new DatabaseFixture();

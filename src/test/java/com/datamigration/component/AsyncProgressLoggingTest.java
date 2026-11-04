@@ -57,10 +57,10 @@ class AsyncProgressLoggingTest {
                 assertThat(messages).noneMatch(m -> m.contains("\n") || m.contains("SELECT 1") || m.contains("INSERT INTO"));
                 release.countDown(); first.completion().toCompletableFuture().get(5,TimeUnit.SECONDS);
                 messages.clear();
-                assertThat(migration.startSync()).isSameAs(first); assertThat(migration.start()).isSameAs(first);
+                assertThat(migration.startSync()).isNotSameAs(first);
                 assertThat(messages).anyMatch(m -> m.contains("status=SUCCEEDED finished=true") && m.contains("committedRows=10"));
                 assertThat(messages).anyMatch(m -> m.contains("state=SUCCEEDED totalRows=10 committedRows=10"));
-                assertThat(calls.get()).isEqualTo(1);
+                assertThat(calls.get()).isEqualTo(2);
             } finally { release.countDown(); }
         }
     }
