@@ -17,7 +17,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import static org.assertj.core.api.Assertions.*;
 
-/** Local synthetic verification only. HostMigrationE2EIT never creates H2 or real database objects. */
+/**
+ * Exercises manual source/target cuts and explicit recovery with the same runner.
+ * Slow connection initialization reproduces pool startup races on slower test hosts.
+ */
 class ManualHostRecoveryIT {
     @TempDir Path directory;
     private final HttpClient client = HttpClient.newHttpClient();
@@ -26,6 +29,8 @@ class ManualHostRecoveryIT {
     void manualCutFailsAndExplicitRunResumesWithTheSameRunner(String side) throws Exception {
         try (var db = new TcpDatabases(directory)) {
             db.seed(2000);
+            DatabaseFixture.execute(db.sourceUrl(), "CREATE ALIAS TEST_CONNECTION_DELAY FOR 'java.lang.Thread.sleep'");
+            DatabaseFixture.execute(db.targetUrl(), "CREATE ALIAS TEST_CONNECTION_DELAY FOR 'java.lang.Thread.sleep'");
             int sourcePort = URI.create(db.sourceUrl().substring("jdbc:h2:".length())).getPort();
             int targetPort = URI.create(db.targetUrl().substring("jdbc:h2:".length())).getPort();
             var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
@@ -52,7 +57,8 @@ class ManualHostRecoveryIT {
                  })) {
                 try {
                     post(console, "run");
-                    assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                    boolean paused = entered.await(30, TimeUnit.SECONDS);
+                    assertThat(paused).as("Migration did not reach the fault boundary: %s", status(console)).isTrue();
                     post(console, side + "/cut"); release.countDown();
                     awaitState(console, "FAILED");
                     post(console, side + "/restore");
@@ -74,25 +80,36 @@ class ManualHostRecoveryIT {
     private void post(ManualMigrationConsole console, String action) throws Exception {
         var response = client.send(HttpRequest.newBuilder(URI.create(console.url() + action))
                 .timeout(Duration.ofSeconds(3)).POST(HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(response.statusCode()).as(action).isEqualTo(200);
+        assertThat(response.statusCode()).as("Action %s: %s", action, response.body()).isEqualTo(200);
+    }
+
+    private String status(ManualMigrationConsole console) throws Exception {
+        var response = client.send(HttpRequest.newBuilder(URI.create(console.url() + "status"))
+                .timeout(Duration.ofSeconds(3)).GET().build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).as("status").isEqualTo(200);
+        return response.body();
     }
 
     private void awaitState(ManualMigrationConsole console, String state) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         while (true) {
-            var response = client.send(HttpRequest.newBuilder(URI.create(console.url() + "status"))
-                    .timeout(Duration.ofSeconds(3)).GET().build(), HttpResponse.BodyHandlers.ofString());
-            if (response.body().contains("migration=" + state)) return;
-            if (state.equals("SUCCEEDED") && response.body().contains("migration=FAILED"))
-                throw new AssertionError("Recovery failed: " + response.body());
-            if (System.nanoTime() > deadline) throw new AssertionError("Timed out waiting for " + state + ": " + response.body());
+            String current = status(console);
+            if (current.contains("migration=" + state)) return;
+            if (state.equals("SUCCEEDED") && current.contains("migration=FAILED"))
+                throw new AssertionError("Recovery failed: " + current);
+            if (state.equals("FAILED") && current.contains("migration=SUCCEEDED"))
+                throw new AssertionError("Fault did not fail the migration: " + current);
+            if (System.nanoTime() > deadline) throw new AssertionError("Timed out waiting for " + state + ": " + current);
             Thread.sleep(20);
         }
     }
 
     private HikariDataSource pool(String url) {
         var pool = new HikariDataSource(); pool.setJdbcUrl(url); pool.setUsername("sa"); pool.setPassword("");
-        pool.setMaximumPoolSize(4); pool.setMinimumIdle(0); pool.setConnectionTimeout(500);
+        pool.setMaximumPoolSize(4); pool.setMinimumIdle(0);
+        pool.setConnectionTimeout(Duration.ofSeconds(5).toMillis());
+        // Keep startup slower than the former 500 ms acquisition timeout to catch this regression.
+        pool.setConnectionInitSql("CALL TEST_CONNECTION_DELAY(750)");
         return pool;
     }
 }
