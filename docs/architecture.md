@@ -20,25 +20,35 @@ This document explains implementation decisions. See [host integration](getting-
 
 MigrationRunner accepts two host-supplied DataSources and loads configuration through ConfigData without creating a Spring context. The Spring adapter is discovered through AutoConfiguration.imports, selects host DataSources using source/target annotations, and binds/caches rules on the first call. It registers no ApplicationRunner. There is no REST interface and no participation in host business transactions.
 
-DataSourceConnections only borrows connections, setting READ_COMMITTED and autoCommit=false. It ends unfinished transactions, restores host transaction properties, and returns connections. If rollback fails, it does not enable autoCommit, avoiding an accidental commit. Runner/Spring shutdown closes only the engine; the host always owns DataSources. Endpoint metadata is no longer read to compute identities; the caller must preserve actual endpoints and configuration during recovery.
+DataSourceConnections borrows independent connections, sets READ_COMMITTED and autoCommit=false, ends unfinished transactions, restores properties, and returns connections. If rollback fails it avoids enabling autoCommit, preventing an accidental commit. Runner/Spring shutdown stops the background caller and waits for workers and transactions to finish. DataSources remain host-owned. Recovery relies on the caller preserving actual endpoints and configuration rather than computed endpoint identities.
 
 Only JDK 17 is supported and verified. ExecutorScope calls shutdown on scope exit and waits for all tasks. If interrupted while waiting, it calls shutdownNow, continues waiting for cleanup, then restores the caller's interrupted flag. This replaces newer JDK ExecutorService.close behavior while preserving rollback and Spring shutdown ordering.
 
 ```mermaid
 flowchart TD
-    A[MigrationService.migrate] --> B[Bind validation and connection budget]
-    B --> C[tryAcquire JVM-wide permit]
+    A[migrate or migrateAsync] --> R{Attempt still running?}
+    R -->|Yes| S[Return current execution and progress]
+    R -->|No| T[Create background execution]
+    T --> B[Validate configuration and capacity]
+    B --> C[Acquire JVM-wide permit]
     C --> D[Bounded table scheduling]
-    D --> E[SQL and mapping preflight]
-    E --> F{Unique key?}
-    F -->|Yes| G[Page and plan fixed key ranges]
+    D --> E[Read target audit]
+    E -->|Already successful| M[Collect table result]
+    E -->|Data unfinished| F{Keyed table?}
+    E -->|Data complete| V
+    F -->|Yes| G[Plan bounded key ranges]
     G --> H[Bounded batch concurrency]
-    H --> I[Business INSERT and successful checkpoint in one transaction]
-    F -->|No| J[Whole-table transaction and one checkpoint]
+    H --> I[Commit data and checkpoint together]
+    F -->|No| J[Whole-table transaction]
     I --> K[Verify totals and completion flags]
     J --> K
-    K --> L[Sequence finalization]
-    L --> M[Collect independent table results]
+    K --> V{Verification enabled?}
+    V -->|No| L[Sequence finalization]
+    V -->|Yes| Q[Compare counts and sampled content]
+    Q -->|Pass| L
+    Q -->|Mismatch or query failure| X[Preserve data and checkpoints]
+    X --> Y[Fail attempt and explicitly retry verification]
+    L --> M
 ```
 
 ## SQL and source-data requirements
@@ -61,7 +71,7 @@ Restart with the same job-id and task name, read unsuccessful planned batches, t
 
 Keyless tables require worker-count=1. All reads and writes belong to one target transaction, and bad data is not skipped. batch-size controls executeBatch only, not commit. A coordinator connection may record processing progress separately, but it does not represent committed data. After process interruption, the target transaction rolls back and the next attempt restarts the whole table.
 
-Default APPEND_RESUME does not clear targets. Explicit CLEAR_AND_REIMPORT uses DELETE to avoid database-specific TRUNCATE implicit-commit differences. Keyed tables clear and commit the prepared flag before importing; recovery with the same job-id does not clear again. Keyless tables place DELETE, all INSERTs, and the successful checkpoint in one transaction. A new full reimport needs a new job-id and does not overwrite old audit history.
+APPEND_RESUME appends without clearing. CLEAR_AND_REIMPORT explicitly uses DELETE to avoid implicit TRUNCATE commit differences. Keyed tables commit clearing and the prepared flag before importing, and recovery does not clear again. Keyless tables include DELETE, all INSERTs, and the successful checkpoint in one transaction. A new job-id preserves previous audit history during reimport. After manually clearing target data and all corresponding task audit rows, the original Runner can also restart the same job-id from scratch.
 
 Deployment owns target triggers, foreign keys, and permissions. There is no automatic cascade, temporary constraint disabling, or automatic upsert. Independent tables run in parallel; one failure does not prevent others from completing. MigrationException.result() retains per-table status. A batch failure stops queued batches of that table from starting. Already running batches finish their transaction handling, and unexecuted ranges remain recoverable checkpoints.
 
@@ -75,7 +85,7 @@ Sequences are calibrated only after data commits. The maximum target ID must be 
 
 ## JVM execution coordination and transactional row locks
 
-The default JdbcMigrationEngine public execute entry uses a static, single-permit Semaphore.tryAcquire. Any overlapping call fails immediately, regardless of Runner, Spring context, or target table, before borrowing connections. Individual Runners/engines also reject reentry. Hosts supplying a custom MigrationEngine own its execution coordination.
+JdbcMigrationEngine.execute uses a static single-permit Semaphore.tryAcquire. Before entering the engine, synchronous and asynchronous duplicates on one Runner/Service return the same running execution. Calls after completion create a new execution and read target auditing. Overlapping engines in different Runners, Spring contexts, or target tasks fail before borrowing connections. The observer updates memory when checkpoints are restored, commits confirmed, and phases change, without additional audit polling. Hosts implementing a custom MigrationEngine own its coordination.
 
 The executing call owns the permit. close only requests cancellation and waits for cleanup; it does not release the permit. Success, exceptions, interruption, and cancellation all wait through ExecutorScope for tables/workers and connection transactions to finish before execute's finally releases it. Closing an unused Runner does not affect an active migration.
 
@@ -93,4 +103,8 @@ JdbcRows reads row by row. Ordinary JDBC batches are constrained by both batch-s
 
 ## Validation layers
 
-Unit/component tests cover transactions, boundaries, configuration, SQL, JDBC contracts, and fault injection. JaCoCo measures Surefire only, excluding Failsafe E2E. E2E uses two actual H2 TCP servers, independent file databases, Spring YAML, and method entry points, covering 10,000 rows, TLS trust, disconnects, and recovery in a new JVM. Mock PostgreSQL dialect JDBC tests do not replace a real PostgreSQL run. Real Oracle TCPS, PostgreSQL drivers, and IAM/ECS require separate validation in those environments.
+Unit/component tests cover transactions, boundaries, configuration, SQL, JDBC contracts, and fault injection. JaCoCo measures Surefire separately from Failsafe. H2 E2E uses TCP servers, independent file databases, YAML, and public entry points, covering 10,000 rows, disconnects, and new-JVM recovery. Real driver and business-data acceptance is separate from mock PostgreSQL tests. Hosts own authentication, TLS, connection pools, and deployment.
+
+## Table verification and manual reimport
+
+Enable per-table verification to compare counts and sample migrated content. A mismatch records VERIFICATION_MISMATCH while preserving target data, successful batches, and data_complete=true. The attempt fails. An explicit subsequent call repeats verification, then runs sequence finalization and records SUCCEEDED if both succeed. Query failures record VERIFICATION_ERROR and preserve the same state. To reimport manually, stop migration, clear the intended target and all audit rows for that task, then call the original Runner again. See [table verification](table-verification.md).

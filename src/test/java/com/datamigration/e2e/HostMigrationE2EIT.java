@@ -1,5 +1,7 @@
 package com.datamigration.e2e;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.TableResult;
 import com.datamigration.api.MigrationRunner;
 import com.datamigration.support.ManualMigrationConsole;
@@ -25,8 +27,8 @@ class HostMigrationE2EIT {
     // Use the real migration configuration in src/test/resources/application.yml.
     // Only data-migration is required; no e2e configuration or validation SQL.
     private static final String CONFIG_LOCATION = "classpath:application.yml";
-    private static final int SOURCE_CAPACITY = 4;
-    private static final int TARGET_CAPACITY = 4;
+    private static final int SOURCE_POOL_SIZE = 4;
+    private static final int TARGET_POOL_SIZE = 4;
 
     // Used only with -Dhost.e2e.manual=true. These are the REAL upstream endpoints.
     private static final String SOURCE_UPSTREAM_HOST = "";
@@ -48,17 +50,17 @@ class HostMigrationE2EIT {
 
         // HOST owns pool creation and closing. Replace these factories with your host's own code.
         try (var source = createPool("host-e2e-source", SOURCE_JDBC_URL, SOURCE_USERNAME,
-                     SOURCE_PASSWORD, SOURCE_CAPACITY);
+                     SOURCE_PASSWORD, SOURCE_POOL_SIZE);
              var target = createPool("host-e2e-target", TARGET_JDBC_URL, TARGET_USERNAME,
-                     TARGET_PASSWORD, TARGET_CAPACITY);
+                     TARGET_PASSWORD, TARGET_POOL_SIZE);
              var migration = MigrationRunner.builder()
-                     .source(source, SOURCE_CAPACITY)
-                     .target(target, TARGET_CAPACITY)
+                     .source(source)
+                     .target(target)
                      .configLocations(CONFIG_LOCATION)
                      .build()) {
 
             // Exactly the call a real host makes. Failure propagates and fails this test.
-            var result = migration.migrate();
+            var result = await(migration);
 
             assertThat(result.tables()).allSatisfy(table ->
                     assertThat(table.status()).isEqualTo(TableResult.Status.SUCCEEDED));
@@ -76,17 +78,17 @@ class HostMigrationE2EIT {
         try (var sourceProxy = new TcpFaultProxy(SOURCE_UPSTREAM_HOST, SOURCE_UPSTREAM_PORT, 0);
              var targetProxy = new TcpFaultProxy(TARGET_UPSTREAM_HOST, TARGET_UPSTREAM_PORT, 0);
              var source = createPool("host-e2e-source", proxyUrl(SOURCE_JDBC_URL, sourceProxy),
-                     SOURCE_USERNAME, SOURCE_PASSWORD, SOURCE_CAPACITY);
+                     SOURCE_USERNAME, SOURCE_PASSWORD, SOURCE_POOL_SIZE);
              var target = createPool("host-e2e-target", proxyUrl(TARGET_JDBC_URL, targetProxy),
-                     TARGET_USERNAME, TARGET_PASSWORD, TARGET_CAPACITY);
+                     TARGET_USERNAME, TARGET_PASSWORD, TARGET_POOL_SIZE);
              var migration = MigrationRunner.builder()
-                     .source(source, SOURCE_CAPACITY).target(target, TARGET_CAPACITY)
+                     .source(source).target(target)
                      .configLocations(CONFIG_LOCATION).build();
              var console = new ManualMigrationConsole(sourceProxy, targetProxy, () -> {
                  // Explicit host reconnection: discard sessions broken by the previous manual cut.
                  evictConnections(source);
                  evictConnections(target);
-                 migration.migrate();
+                 await(migration);
                  assertThat(sourceProxy.forwardedConnections()).as("Source traffic must pass through proxy").isPositive();
                  assertThat(targetProxy.forwardedConnections()).as("Target traffic must pass through proxy").isPositive();
              })) {

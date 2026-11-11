@@ -2,9 +2,7 @@ package com.datamigration.support;
 
 import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.ValueConverter;
-import com.datamigration.model.TableTask;
 import com.datamigration.properties.MigrationConfiguration;
-import com.datamigration.support.TcpDatabases;
 import java.net.URI;
 import java.nio.file.*;
 import java.sql.*;
@@ -25,7 +23,7 @@ public final class ResilienceSuite {
             String sourceHost = settings.sourceProxy().upstreamHost(), targetHost = settings.targetProxy().upstreamHost();
             int sourcePort = settings.sourceProxy().upstreamPort(), targetPort = settings.targetProxy().upstreamPort();
             if (settings.environment().equals("h2")) {
-                databases = new TcpDatabases(output.resolve("databases"), false);
+                databases = new TcpDatabases(output.resolve("databases"));
                 databases.seed(settings.seedRows());
                 sourceHost = "127.0.0.1"; targetHost = "127.0.0.1";
                 sourcePort = URI.create(databases.sourceUrl().substring("jdbc:h2:".length())).getPort();

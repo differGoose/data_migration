@@ -6,17 +6,19 @@ An embeddable JDBC migration component for Java 17 / Spring Boot 4.1.1. The host
 
 | What you need | Documentation |
 | --- | --- |
-| Migrate before the host calls `.run()`, or integrate through Spring annotations | [Host integration](docs/getting-started.md) |
-| Understand per-table batch-size, job-id, and field mappings | [Configuration](docs/configuration.md) |
-| Run examples with synthetic data | [Local H2 guide](docs/h2-local.md) |
-| Supply custom decryption and IAM DataSources | [Host credentials and DataSources](docs/database-credentials.md) |
-| Inspect progress, resume failures, or reimport all data | [Operations](docs/operations.md) |
-| Configure TLS and ECS integration | [Cloud deployment](docs/cloud-deployment.md) |
-| Pass real DataSources directly to E2E, or run through main/Maven configuration | [Real database E2E](docs/real-database-e2e.md) |
-| Simulate network outages and host crashes | [Resilience testing](docs/resilience-testing.md) |
-| Manually cut/restore source or target connections and resume the original job | [Manual host proxy testing](docs/manual-host-migration.md) |
-| Locate migration failures and configure pre-startup logging | [Logging and troubleshooting](docs/logging-and-troubleshooting.md) |
-| Find implementation details and tests | [Architecture](docs/architecture.md), [test index](docs/test-index.md) |
+| Run before .run() or integrate with Spring annotations | [Host integration](docs/getting-started.md) |
+| Understand batch-size, job-id, and mappings | [Configuration](docs/configuration.md) |
+| Run synthetic examples | [Local H2](docs/h2-local.md) |
+| Understand DataSource ownership, capacity, and lifecycle | [Host DataSources](docs/database-credentials.md) |
+| Inspect progress, resume, or reimport | [Operations](docs/operations.md) |
+| Understand deployment responsibilities | [Deployment boundaries](docs/cloud-deployment.md) |
+| Supply real DataSources or use main/Maven | [Real database E2E](docs/real-database-e2e.md) |
+| Simulate outages and process crashes | [Resilience testing](docs/resilience-testing.md) |
+| Cut and restore source/target connections manually | [Manual proxy testing](docs/manual-host-migration.md) |
+| Use synchronous/asynchronous calls and progress | [Host execution](docs/host-execution.md) |
+| Diagnose failures and pre-startup logging | [Logging](docs/logging-and-troubleshooting.md) |
+| Read implementation and test coverage | [Architecture](docs/architecture.md), [test index](docs/test-index.md) |
+| Present the project and prepare a technical review | [Flowchart](diagrams/project-overview.svg), [review guide](diagrams/project-review-guide.md) |
 
 ## Run before host startup
 
@@ -28,7 +30,7 @@ public static void main(String[] args) {
     try (var source = HostDataSources.createSource();
          var target = HostDataSources.createTarget();
          var migration = MigrationRunner.builder()
-             .source(source, 4).target(target, 4)
+             .source(source).target(target)
              .configLocations("classpath:migration.yml")
              .arguments(args).build()) {
         migration.migrate();
@@ -37,11 +39,11 @@ public static void main(String[] args) {
 }
 ```
 
-Migration exceptions propagate and prevent the real host from starting. `4` declares the connections reserved for migration; it does not resize the pool. Source and target capacities are declared separately. Closing the Runner releases its execution resources without closing host DataSources.
+A migration exception propagates before the host starts. The component computes minimum source/target capacity from configured concurrency, reads HikariCP maximumPoolSize, and reports insufficient capacity before borrowing connections. It does not resize the pool. Closing the Runner releases its execution resources while DataSources remain host-owned.
 
 YAML describes migration rules only; see [migration.yml](examples/migration.yml). Each table has its own `tables[].batch-size`, defaulting to 1000. For keyed tables it defines transaction blocks, the fetch hint, and the JDBC batch row limit. One call continues until migration completes. Keyless tables retain a single transaction for the entire table.
 
-Default engines in the same JVM share one in-memory permit. Overlapping migration calls from any Runner or Spring context immediately throw IllegalStateException. Table and batch concurrency within one migration remains available. The permit is released after transaction and worker cleanup; deployment must prevent migrations in different processes from overlapping.
+migrate() and migrateAsync() on one Runner/singleton Service share running execution state. Duplicate calls immediately return the same MigrationExecution, with progress available through progress(). After an attempt finishes, a new call creates a new execution and reads auditing to skip or resume tables. Starting a new synchronous attempt waits for completion, while an asynchronous call returns immediately. Different Runners or Spring contexts remain subject to JVM-wide exclusion. Tables and batches within one attempt can run concurrently. The permit releases after transaction and worker cleanup. Deployment must prevent overlapping processes. See [host execution](docs/host-execution.md).
 
 ## Repeated calls and recovery
 
@@ -51,7 +53,9 @@ Create target business tables, the audit table, and required sequences manually.
 
 ## Call from a Spring context
 
-The host marks two DataSource @Bean methods or implementation types with `@MigrationSource(capacity=4)` and `@MigrationTarget(capacity=4)`, then injects `MigrationService` and calls it explicitly. Each role must be unique. Starting a context does not automatically run migration. Beans do not yet exist before `.run()`; use the direct-object entry above for that case.
+Mark exactly one source and one target DataSource bean method or implementation class with @MigrationSource and @MigrationTarget, then inject MigrationService and invoke it explicitly. Starting the context does not run migration. Before .run(), use the direct-object entry point above.
+
+For static calls, [MigrationUtil.java](examples/MigrationUtil.java) accepts existing DataSources and exposes MigrationUtil.migrate()/migrateAsync(). Inspect the returned execution or register completion notifications. See [host execution](docs/host-execution.md).
 
 ## Build and boundaries
 
@@ -61,6 +65,8 @@ mvn -B -ntp clean verify
 
 Surefire runs `*Test`; Failsafe runs local `*IT` tests. Real DEV execution requires explicit opt-in. JaCoCo measures Surefire separately, with at least 85% line and branch coverage. Local development and CI support and verify JDK 17 only. The component is a regular dependency JAR, not a standalone executable service; Boot 2/3 compatibility is not currently promised.
 
-This is a breaking redesign: old connection configuration, old batching parameters, and unfinished checkpoints from earlier versions are incompatible. Hikari and H2 are test/demo dependencies only, not host runtime dependencies supplied by the component. Real Oracle/PostgreSQL, IAM, and cloud deployment still require validation in the actual environment.
+This is a breaking redesign of connection configuration, batching APIs, and unfinished checkpoints. Hikari and H2 are test/demo dependencies. Real Oracle/PostgreSQL DataSources and business data require acceptance in the actual environment. Hosts own authentication, TLS, and deployment.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution rules and [CHANGELOG.md](CHANGELOG.md) for changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
+
+Optional per-table count verification and percentage content sampling preserve data and checkpoints on both mismatches and query failures. Explicit retries repeat verification. For manual reimport, stop migration and clear the target and all corresponding task audit rows. Verification defaults to disabled. See [table verification](docs/table-verification.md).

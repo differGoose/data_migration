@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-- Add key diagnostics for configuration, DataSources, connection budgets, table preflight, data commits, and sequence finalization. Use DEBUG for batches, WARN for bounded retries, and ERROR for failures. Correlate run/task/batch context across threads and retain the first safe failure stage with SQLState/vendor codes, without driver messages, SQL, or business data. Include failed tasks and safe summaries in MigrationException messages; document logging before host startup.
+- Calls after an attempt finishes create a new MigrationExecution and read target auditing to skip successful tables or resume unfinished tasks. The original Runner can reimport after manual removal of target data and all task audit rows. Orphan batch rows report AUDIT_SUMMARY_MISSING.
+- Verification mismatches preserve data and checkpoints under VERIFICATION_MISMATCH. Explicit retries repeat verification. Automatic deletion and checkpoint reset have been removed. Legacy cleanup states require manual reset.
+- Every migrate()/migrateAsync() invocation logs an INFO progress snapshot and per-table committed counts. Background completion logs final status. Unknown configuration/totals are identified explicitly, using memory snapshots without borrowing connections.
+- Optional per-table count verification and exact-size random sampling support keyless tables and duplicate rows. Chunked digest sorting bounds memory. Mismatches and query failures preserve state using existing audit fields. Verification precedes sequence finalization.
+- DataSource entry points automatically read HikariCP maximumPoolSize and validate the concurrency budget, including combined demand for a shared pool. Explicit retries re-read capacity. Optional explicit capacity remains available for custom sources and migration allowances within shared pools.
+- Removed H2 TLS tests, certificate subprocesses, SSL switches, and the unused public AuditRepository, TableTaskExecutor, TableReader, BatchWriter, and RowCursor interfaces.
+- Removed unused test driver/pool settings and duplicate H2 recovery resources. DEV recovery uses a host DataSource configuration class. Authentication, TLS, pools, and deployment are host responsibilities. Generic host examples replace ECS-specific code and Dockerfile.
+- Synchronous migrate() and asynchronous migrateAsync() share execution state. Running duplicates return the same MigrationExecution. Subsequent calls after completion read auditing again. progress() returns immutable committed progress and completion() exposes the result or exception. The public return type changed from MigrationResult to MigrationExecution. Closing waits for cleanup and preserves host DataSource ownership.
+- Added configuration, DataSource, capacity, preflight, data commit, and sequence logs. Batch detail uses DEBUG, bounded retries WARN, and terminal failures ERROR. Cross-thread run/task/batch correlation retains the first safe failure stage and SQLState/vendor code. MigrationException includes safe task summaries. See the logging guide.
 
 - Add an optional manual proxy mode to the real host migration test. A local control page independently cuts/restores source and target connections and explicitly resumes the original job with unchanged configuration; no e2e configuration section is required.
 

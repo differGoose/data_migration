@@ -23,7 +23,7 @@ TARGET_JDBC_URL = "jdbc:postgresql://127.0.0.1:{proxy-port}/YOUR_DATABASE";
 
 Keep `{proxy-port}` unchanged; the test allocates two local ports and replaces each template separately. Traffic flows from host pool to local proxy to real database. Do not keep direct real-server addresses in JDBC URLs, or cutting the proxy will not affect migration. Restore ordinary direct URLs when leaving manual mode.
 
-The proxy forwards TCP bytes transparently; the database and driver still perform TLS. Preserve trust and server-identity verification. If the URL must retain the certificate hostname, resolve that name locally to the proxy and ensure upstream independently reaches the real database without looping back. Do not disable certificate verification. Oracle redirection, multiple hosts, and failover addresses beyond a single endpoint also require controlled routing; the proxy cannot cut bypass connections. The host configures connect/read timeouts for its actual driver.
+The proxy forwards TCP bytes transparently and preserves host authentication, TLS, and connection timeout settings. Both DataSources must actually route through it. Upstream addresses must point to the real databases rather than loop back to the proxy. Oracle redirection, multi-host, and failover addresses also require controlled routing, otherwise bypass connections cannot be interrupted.
 
 ## Configuration and startup
 

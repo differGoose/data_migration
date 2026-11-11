@@ -1,8 +1,76 @@
 # Local implementation and acceptance records
 
-Earlier entries below are historical acceptance evidence. Connection configuration and batching parameters have undergone breaking changes; use README and getting-started.md for current integration. Only JDK 17 is currently supported and verified. All dual-JDK, execution-lock, and fingerprint entries below are historical, not descriptions of current capabilities.
+## English branch synchronization (2026-11-12)
 
-## Key diagnostics and safe failure attribution (2026-10-30)
+Merged main at 5fd7747 into codex/english-docs-comments without changing main. Updated English integration, configuration, verification, recovery, logging, test index, historical evidence, and sharing materials, including a rendered English SVG. Runtime logic matches main; English console text and explanatory comments remain branch-specific. Intentional Unicode test data is preserved.
+
+Amazon Corretto 17.0.16 `mvn -B -ntp clean verify` passed: 296 unit/component tests and 22 integration tests passed, with three real-database entries skipped by default. UT coverage: lines 1674/1696 (98.70%), branches 1050/1194 (87.94%); both 85% gates passed. HostMigration and MigrationUtil compiled with `javac --release 17`. All 174 local documentation links passed and the English SVG was rendered and visually inspected. No real database connections were attempted. Local ignored build log: target-english-sync-jdk17.log.
+
+This page preserves dated historical evidence. Automatic cleanup on verification mismatch and CLEANUP_PENDING recovery have since been removed. Current verification preserves data and checkpoints and retries verification explicitly; see [table verification](table-verification.md). Historical counts and behavior do not describe the current release.
+
+## Re-read auditing after each execution (2026-11-04)
+
+Synchronous and asynchronous calls share an execution only while it is unfinished. A new attempt reads target auditing to skip, resume, or restart each table. Successful tables do not borrow a source connection. Orphaned batches without a summary fail with AUDIT_SUMMARY_MISSING.
+
+JDK 17 mvn -B -ntp clean verify passed: 296 unit/component tests and 20 integration tests passed; three real-database entries were skipped by default. Line coverage was 98.70%, branch coverage 87.94%; both 85% gates passed.
+
+## Preserve verification mismatches and retry verification only (2026-11-03)
+
+Removed verification-triggered business DELETE, checkpoint deletion, and counter resets. VERIFICATION_MISMATCH preserves data_complete=true and successful batches. Explicit retries skip data transfer and INSERT preflight, verify again, then continue sequence finalization. Legacy CLEANUP_PENDING / VERIFICATION_FAILED stop with LEGACY_VERIFICATION_RESET_REQUIRED for manual handling. Audit DDL did not change.
+
+JDK 17 clean verify passed with 293 unit/component tests and 20 of 23 integration tests passing; three real entries were skipped. Separate JVMs restarted after VERIFYING and VERIFICATION_MISMATCH, retained incorrect data, and verified successfully after manual correction. A further test covered manual deletion of target data and all task auditing, followed by a new Runner. Subsequent -DskipITs verify passed all 294 unit/component tests. Final coverage: lines 98.70%, branches 87.77%. All 150 local documentation links passed. No real databases, commits, or pushes were involved in this recorded validation.
+
+## Pre-main checks (2026-11-03, historical cleanup behavior)
+
+JDK 17 clean verify passed: 290 unit/component tests, 20 integration tests, three real entries skipped. Review found that in-memory progress was not reset after pending cleanup recovery. The fix added intermediate-count assertions. A subsequent -Dit.test=VerificationRecoveryIT verify passed 290 unit/component tests and two separate-JVM verification recovery tests. Coverage: lines 98.72%, branches 87.73%. Review had no remaining findings. The development version was retained; no real database was used and the English branch was unchanged.
+
+## Progress logging on invocation (2026-11-03)
+
+Every migrate/migrateAsync invocation logs an INFO memory snapshot and per-table committed counts; background completion logs final status. Initial synchronous waiting and running-call deduplication remain unchanged. JDK 17 -DskipITs verify passed 290 unit/component tests; coverage was 98.72% lines and 87.65% branches. All 64 targeted asynchronous/logging/verification regressions and 149 local links passed. Integration tests were not rerun in this step; earlier full evidence is below. No real databases, commits, or pushes were involved.
+
+## Table verification and failure cleanup (2026-11-03, historical: cleanup removed)
+
+- JDK 17 clean verify passed: 288 unit/component tests, 20 integration tests, three real entries skipped. Local ignored log: target-table-verification-jdk17.log.
+- JaCoCo UT coverage: lines 1680/1703 (98.65%), branches 1034/1182 (87.48%); both 85% gates passed.
+- Covered per-table percentages, exact rounding, empty tables, composite/keyless tables, minimum capacity, duplicate rows, conversion, host converters, LOBs, safe logs, and mixed synchronous/asynchronous deduplication.
+- Historical tests covered whole-table cleanup on confirmed mismatch, atomic cleanup/checkpoint reset, cleanup-intent persistence failure, lost cleanup commit response, query timeouts preserving data, and sequence retries. Separate JVMs exited after VERIFYING/CLEANUP_PENDING and recovered through the public Runner.
+- Host examples compiled with Java 17. External DataSource templates used temporary host placeholder types under target. All 147 local README/docs links passed; audit DDL was unchanged.
+- Existing uncommitted automatic-capacity and host-utility changes were preserved. No real Oracle/PostgreSQL connections, automatic commits/pushes, or English-branch edits occurred in this recorded step.
+
+H2TlsIT, certificate subprocesses, and ECS-specific examples have been removed. Their names below describe historical evidence only. See [host DataSource responsibilities](database-credentials.md). Earlier connection/batch APIs, dual-JDK checks, execution locks, and fingerprints are historical; current support and validation target JDK 17 only.
+
+## Automatic HikariCP capacity checks (2026-11-01)
+
+Added source(DataSource)/target(DataSource); MigrationUtil no longer requires SOURCE_CAPACITY/TARGET_CAPACITY. Annotation capacity defaults to zero for automatic detection. Explicit positive capacities remain for custom/unpooled sources and reserved shared-pool quotas. Budgets use enabled tables, max-concurrent-tables, and worker-count, checking actual HikariCP maximumPoolSize. Spring DelegatingDataSource chains and JDBC unwrap are supported. Recognized shared pools require the combined budget. Host pools are not modified; no production Hikari dependency was added.
+
+Insufficient capacity reports endpoint, required capacity, and actual maximumPoolSize before borrowing. Initial synchronous calls throw; asynchronous callers inspect completion and safe logs. Unknown maxima fail explicitly; declarations cannot hide smaller detected pools. Explicit retry re-reads pool limits. Successful-execution caching was retained at that historical date and has since been removed. Static capacity checks do not guarantee free business-pool connections; the host reserves headroom.
+
+Amazon Corretto 17.0.16 clean verify passed: 258 unit/component tests, 18 integration tests, three real entries skipped. UT lines 1430/1447 (98.83%), branches 836/950 (88.00%). Seventeen capacity tests covered budgets, minimum pools, failure without borrowing, shared pools, wrappers, unknown types, pool adjustment/recovery, keyless budgets, Spring auto-selection, and safe logs. Log: target-pool-final17.log.
+
+HostMigration/MigrationUtil compiled with release17. A separate-JVM utility smoke test covered automatic capacity, undersized-pool failure, corrected retries, mixed-call reuse, and host ownership (target-pool-host-smoke17.log). BeforeStartupDemo passed (target-pool-demo17.log). No real database, commit, push, or English-branch change occurred.
+
+## TLS fixtures and legacy integration cleanup (2026-11-01)
+
+Removed H2TlsIT, the untrusted-certificate subprocess, certificate generation, and SSL switches; H2 fixtures use plain TCP. Removed unused public types AuditRepository, TableTaskExecutor, TableReader, BatchWriter, and RowCursor, unused host-databases driver/pool settings, and 22 unused/duplicate imports.
+
+examples/resilience/h2.yml is the sole H2 recovery configuration, still exposed at classpath:resilience/h2.yml through Maven test resources. DEV templates reference host DataSource configuration and retain parent proxies, traffic checks, and separate JVM recovery. ECS-specific entry/Dockerfile were removed; authentication, TLS, pools, and deployment belong to the host. Drivers, active extensions, and pending sync/async/progress work were preserved.
+
+Corretto 17.0.16 clean verify passed: 241 unit/component tests, 18 integration tests, three real entries skipped. UT lines 1363/1379 (98.84%), branches 774/882 (87.76%). Log: target-cleanup-verified17.log. HostMigration compiled with release17; BeforeStartupDemo passed with then-current successful-handle reuse (target-cleanup-demo17.log).
+
+The JAR excluded the five removed types and retained execution/progress APIs. Packaged H2 configuration matched the examples source byte-for-byte. Current links passed; removed TLS/ECS evidence was labeled historical. No real databases, commits/pushes, or English-branch changes occurred.
+
+## Unified synchronous/asynchronous deduplication and progress (2026-11-01, historical terminal reuse)
+
+Added migrateAsync() alongside migrate(), both returning MigrationExecution. Initial synchronous calls waited and propagated errors. At this historical date, running OR successful attempts reused the same object; current behavior only reuses running attempts. Failed attempts could be explicitly retried after cleanup with the same job/config and auditing. Different Runner instances remained protected by the JVM-wide permit.
+
+progress() exposes immutable run/table snapshots, totals, confirmed commits, and skipped counts without polling databases or changing budgets. Source totals are initially unknown. Keyless uncommitted rows are not shown as complete. Data completion and sequence finalization are distinct. completion() preserves MigrationResult/errors; cancelling a derived future does not cancel migration. close waits for worker/transaction cleanup and leaves host DataSources open. Progress keeps table-level counters; active-batch flags prevent duplicate accounting during commit verification.
+
+Corretto 17.0.16 clean verify passed: 241 unit/component tests, 19 integration tests, three real entries skipped. UT lines 1363/1379 (98.84%), branches 774/882 (87.76%). Eleven new tests covered sync-first/async-first, mixed concurrent calls, Spring singleton, immutable progress, historical success caching, recovery/new Runner, keyless transactions, sequence failure, interruption/close, commit verification, and connection-return failure without double counting. Log: target-async-verified17.log.
+
+HostMigration and the then-present ECS example compiled with release17. BeforeStartupDemo ran in a separate JVM (target-async-startup17.log). Parent-proxy/subprocess recovery passed. No real Oracle/PostgreSQL connection was attempted. See [host execution](host-execution.md). This historical step ran on main without commit/push or English-branch changes.
+
+## Key-stage logging and safe failure diagnostics (2026-10-30)
+
 
 Add com.datamigration SLF4J diagnostics: INFO for configuration, endpoint connections, budgets, table preflight, recovery/reuse, data commits, and sequence finalization; DEBUG for batches; WARN for bounded retries; ERROR for the original failure phase. Correlate runId/task/batch across threads. Keep only safe categories, property paths, SQLState, and vendor codes, without sending driver messages or exception stacks to the logger. MigrationException messages include failed tasks, statuses, and existing safe error codes. Audit structure and migration/retry transaction rules are unchanged.
 

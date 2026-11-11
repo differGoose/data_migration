@@ -1,5 +1,7 @@
 package com.datamigration.resilience;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
 import com.datamigration.conversion.JdbcValueConverter;
 import com.datamigration.execution.*;
@@ -15,13 +17,17 @@ import java.sql.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.*;
 
+/**
+ * Stops either the source or target H2 server after a batch has committed, then
+ * verifies that migration resumes from the persisted checkpoints after the server restarts.
+ */
 class H2RecoveryIT {
     @TempDir Path directory;
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void realServerDisconnectionAfterACommittedBatchCanResume(boolean stopTarget) throws Exception {
-        try (var databases = new TcpDatabases(directory, false)) {
+        try (var databases = new TcpDatabases(directory)) {
             databases.seed(10_000);
             AtomicBoolean triggered = new AtomicBoolean();
             ConnectionAccess access = new ConnectionAccess() {
@@ -62,7 +68,7 @@ class H2RecoveryIT {
                         new JdbcMigrationEngine(access, 6, 6,
                                 new JdbcValueConverter())))
                     .run("--spring.config.location=classpath:recovery.yml")) {
-                assertThatThrownBy(() -> context.getBean(MigrationService.class).migrate()).isInstanceOf(MigrationException.class);
+                assertThatThrownBy(() -> await(context.getBean(MigrationService.class))).isInstanceOf(MigrationException.class);
                 assertThat(triggered).isTrue();
             }
             if (stopTarget) databases.restartTarget(); else databases.restartSource();
@@ -82,7 +88,7 @@ class H2RecoveryIT {
                         new JdbcMigrationEngine(restored, 6, 6,
                                 new JdbcValueConverter())))
                     .run("--spring.config.location=classpath:recovery.yml")) {
-                assertThat(context.getBean(MigrationService.class).migrate().tables().get(0).committedRows()).isEqualTo(10_000);
+                assertThat(await(context.getBean(MigrationService.class)).tables().get(0).committedRows()).isEqualTo(10_000);
             }
             MigrationAssertions.assertEquivalent(databases);
         }

@@ -43,6 +43,12 @@ public record MigrationProperties(
                 .allMatch(t -> targets.add(t.targetTable().toLowerCase(Locale.ROOT)));
     }
 
+    @AssertTrue(message = "verification requires data-migration.strategy.skip-limit=0")
+    public boolean isVerificationSkipValid() {
+        return strategy == null || strategy.skipLimit() == 0 || tables == null
+                || tables.stream().noneMatch(t -> t != null && t.enabled() && t.verification() != null && t.verification().enabled());
+    }
+
     public MigrationPlan toPlan() {
         return new MigrationPlan(jobId, new MigrationStrategy(strategy.skipLimit(), strategy.transientRetryCount(),
                 strategy.retryInitialBackoff(), strategy.retryMaxBackoff(), strategy.maxConcurrentTables(),
@@ -52,7 +58,8 @@ public record MigrationProperties(
                     .map(t -> new TableTask(t.name(), t.selectSql(), t.insertSql(),
                         t.fields().stream().map(f -> new FieldMapping(f.sourceColumn(), f.targetJdbcType())).toList(),
                         t.targetTable(), t.primaryKey(), t.workerCount(), t.mode(),
-                        new SequenceSpec(t.sequence().enabled(), t.sequence().name(), t.sequence().targetColumn()), t.batchSize()))
+                        new SequenceSpec(t.sequence().enabled(), t.sequence().name(), t.sequence().targetColumn()), t.batchSize(),
+                        new VerificationSpec(t.verification().enabled(), t.verification().samplePercent())))
                     .toList());
     }
 
@@ -98,7 +105,8 @@ public record MigrationProperties(
             @NotBlank String selectSql,
             @NotBlank String insertSql,
             @NotEmpty List<@NotNull @Valid Field> fields,
-            @DefaultValue("1000") @Min(1) int batchSize) {
+            @DefaultValue("1000") @Min(1) int batchSize,
+            @DefaultValue @Valid Verification verification) {
         public Table { primaryKey = primaryKey == null ? List.of() : List.copyOf(primaryKey); }
         @AssertTrue(message = "keyless tables require worker-count=1; primary-key columns must be unique")
         public boolean isKeyValid() {
@@ -106,6 +114,13 @@ public record MigrationProperties(
                     && primaryKey.stream().map(k -> k.toUpperCase(Locale.ROOT)).distinct().count() == primaryKey.size();
         }
         @Override public String toString() { return "Table[SQL redacted]"; }
+    }
+
+    public record Verification(@DefaultValue("false") boolean enabled, java.math.BigDecimal samplePercent) {
+        @AssertTrue(message = "enabled verification requires sample-percent greater than zero and at most 100")
+        public boolean isValid() {
+            return !enabled || samplePercent != null && samplePercent.signum() > 0 && samplePercent.compareTo(java.math.BigDecimal.valueOf(100)) <= 0;
+        }
     }
 
     public record Sequence(@DefaultValue("false") boolean enabled, String name, String targetColumn) {

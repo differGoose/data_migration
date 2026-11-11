@@ -11,7 +11,7 @@ public final class H2Demo {
 
     public static void startDemoDatabases() throws Exception {
         Path directory = Path.of("target", "h2-demo-" + System.currentTimeMillis());
-        try (var databases = new TcpDatabases(directory, false)) {
+        try (var databases = new TcpDatabases(directory)) {
             databases.seed(10_000);
             databases.seedDocuments();
             System.out.println("Source: " + databases.sourceUrl());

@@ -82,7 +82,7 @@ public final class HostDataSources {
 }
 ```
 
-The host runtime supplies these six environment variables. If passwords need decryption, decrypt them in this factory. IAM should obtain new connections through a host DataSource supporting dynamic tokens; do not permanently use a once-generated token as a pool password. See [DataSources and credentials](database-credentials.md).
+This is a minimal host DataSource example. Existing host DataSources can be passed directly. Authentication, TLS, pools, and timeouts are host responsibilities. See [DataSource ownership](database-credentials.md).
 
 ## 4. Migrate first, then start the host in main
 
@@ -97,8 +97,8 @@ public class Application {
         try (var source = HostDataSources.createSource();
              var target = HostDataSources.createTarget();
              var migration = MigrationRunner.builder()
-                 .source(source, 4)
-                 .target(target, 4)
+                 .source(source)
+                 .target(target)
                  .configLocations("classpath:migration.yml")
                  .arguments(args)
                  .build()) {
@@ -109,7 +109,7 @@ public class Application {
 }
 ```
 
-The last line runs only after migration succeeds. No temporary Spring context is started; host business beans and web services start after migration. Builder capacity declarations neither create nor resize pools. Four connections suffice for one keyed table with one worker. Calculate concurrent-table requirements using the [connection budget](configuration.md).
+The final line runs only after migration succeeds. No temporary Spring context is created, and business beans/web services start afterward. Capacity inspection reads HikariCP maximumPoolSize and validates configured table/worker concurrency without creating or resizing pools. Insufficient capacity identifies source/target, required demand, and maximumPoolSize. See [connection budgets](configuration.md).
 
 These pools are migration-specific resources in this example, so the host closes them with try-with-resources. If shared pools are needed by the host afterward, keep their lifecycle under host ownership and close only the Runner. The component never closes a supplied DataSource.
 
@@ -129,11 +129,11 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 public class MigrationDataSourcesConfiguration {
     @Bean(destroyMethod = "close")
-    @MigrationSource(capacity = 4)
+    @MigrationSource
     public DataSource source() { return HostDataSources.createSource(); }
 
     @Bean(destroyMethod = "close")
-    @MigrationTarget(capacity = 4)
+    @MigrationTarget
     public DataSource target() { return HostDataSources.createTarget(); }
 }
 ```
@@ -152,12 +152,12 @@ Inject `com.datamigration.api.MigrationService` and explicitly call `migrate()`.
 
 ## 6. Repeated calls and restarts
 
-Call migrate again on the same Runner, or create a new Runner with the same configuration after restart: successful tables are skipped, failed tables resume unfinished blocks, and sequence finalization failures retry finalization only. Preserve job-id, task name, actual DataSources, and all migration rules. No YAML change is needed to request recovery.
+Every call on the same Runner after an attempt finishes re-reads target auditing. Successful tables skip, failed tables resume unfinished blocks, and data-complete tasks continue verification/finalization. Preserve job-id, task name, actual DataSources, and migration rules. Recovery requires no YAML change.
 
 Configuration is cached after the first successful binding, with no hot reload. Later additions to the source database are not automatically synchronized by repeated calls. Changing batch-size or other rules and resuming the same job is unsupported; the component computes no digest to detect changes.
 
-The method synchronously returns MigrationResult. Table failures throw MigrationException; inspect result().tables() for committedRows, skippedRows, status, and redacted errors. Configuration or DataSource initialization can throw other runtime exceptions and must also prevent host startup. See [operations](operations.md) for handling details.
+Both methods return MigrationExecution. A new migrate() attempt waits and propagates failures. migrateAsync() reports completion or failure through completion(). Running cross-method duplicates return the same execution immediately, with progress() snapshots. After completion, the next call creates a new execution and reads auditing again. See [host execution](host-execution.md) and [operations](operations.md).
 
 A runnable example is [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java), using isolated H2 synthetic data without real accounts.
 
-Only one migration executes per JVM. Overlapping calls from different Runners/Spring contexts fail immediately; table and batch concurrency inside one call remains available. Deployment must ensure only one migration process runs at a time. Only JDK 17 is supported and verified. See [audit design](audit.md) for schema and recovery boundaries.
+Duplicates on one instance share its running execution. Different Runners/Spring contexts cannot execute overlapping migrations in the same JVM. One migration still supports table and batch concurrency. Deployment must ensure a single migration process at a time. Only JDK 17 is supported and verified. See [audit design](audit.md).

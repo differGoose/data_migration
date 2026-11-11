@@ -54,7 +54,7 @@ Source/target JDBC URLs, usernames, and passwords are blank. Fill six constants 
 mvn -B -ntp test-compile failsafe:integration-test failsafe:verify "-Dit.test=HostMigrationE2EIT" "-Dhost.e2e.enabled=true"
 ```
 
-In the IDE, add VM argument `-Dhost.e2e.enabled=true` to the JUnit run configuration and run the method. Real database execution is skipped by default. Explicit opt-in with missing connection settings fails, with no H2 fallback. Each pool has four connections; adjust capacity constants if migration needs more. The host configures driver connect/read timeouts. In ordinary mode, migration exceptions fail the test directly. There is no extra content comparison or automatic repetition; repeated runs follow production job-id recovery semantics.
+Set -Dhost.e2e.enabled=true in the IDE JUnit VM arguments. Real entry points skip by default and fail explicitly when enabled without connection settings. Both example pools have capacity 4. Increase the actual host pool if needed, and Runner will validate it automatically. Hosts configure connect/read timeouts. In ordinary mode a migration exception fails the test. This entry point adds no external content comparison or automatic duplicate execution, and subsequent runs follow the production job-id recovery rules.
 
 DatabaseE2E.run above and ConfiguredDatabaseE2EIT below remain additional validation entries that require e2e configuration. Use HostMigrationE2EIT from this section to simulate only a real host call.
 
@@ -62,7 +62,7 @@ To manually cut/restore source or target during migration, also set `-Dhost.e2e.
 
 ## Option 2: run main or Maven
 
-A separate process cannot access Java objects in your current JVM. Supply a Spring configuration class that only registers source/target DataSources, exposing existing DataSources without implementing a new interface. See the [configuration template](../examples/e2e/ExternalDataSourcesConfiguration.java) and replace YourExistingDataSources. Each role must have exactly one bean marked `@MigrationSource(capacity=...)` or `@MigrationTarget(capacity=...)`; unrelated DataSources are ignored.
+Independent JVMs cannot use objects from your current process. Supply a Spring configuration class registering the existing source and target DataSources, with no new factory interface required. Replace YourExistingDataSources in the [configuration template](../examples/e2e/ExternalDataSourcesConfiguration.java). Mark exactly one bean each with @MigrationSource and @MigrationTarget. Hikari capacity is automatic. Unsupported custom sources can declare positive capacities. Unmarked beans are ignored.
 
 Put the configuration class on the test classpath; do not pass the entire business application entry class. Tests load only explicitly named classes and do not import the H2 host by default. The test-host context manages bean destruction according to your declaration. For borrowed shared objects, use `@Bean(destroyMethod="")` to disable Spring's inferred close, as in the template. If that test host creates and owns pools, explicitly use `destroyMethod="close"` to release them.
 

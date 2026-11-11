@@ -28,6 +28,6 @@ Do not commit:
 
 Include Java/database/driver versions, redacted configuration, expected behavior, actual status, and reproducible synthetic data. Do not upload database passwords, tokens, raw business rows, or credential-bearing JDBC URLs to public issues or PRs.
 
-Changes involving unknown commit outcomes, checkpoints, target clearing, concurrency locks, skip budgets, or sequences must verify that recovery neither duplicates nor loses data. Record real Oracle TCPS, PostgreSQL, IAM, and ECS validation separately from local H2 tests. The host DataSource entirely manages database connections and credentials; the host implements IAM token handling. See docs/database-credentials.md.
+Changes to commit-outcome verification, checkpoints, clearing, concurrency, skip budgets, or sequences must verify that recovery neither duplicates nor loses data. Record real Oracle/PostgreSQL acceptance separately from local H2 tests. Hosts own authentication, TLS, pools, and deployment and supply usable DataSources. See docs/database-credentials.md.
 
 See the [test index](docs/test-index.md) for test directories and package-access exceptions. New recovery scenarios must follow the [resilience testing rules](docs/resilience-testing.md); do not automatically clean or create DEV business/audit tables.

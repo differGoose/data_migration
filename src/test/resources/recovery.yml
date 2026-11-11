@@ -9,6 +9,13 @@ data-migration:
       target-table: CUSTOMER
       primary-key: [ID]
       worker-count: 1
+      verification:
+        enabled: ${test.recovery.verification:false}
+        sample-percent: 100
+      sequence:
+        enabled: ${test.recovery.sequence:false}
+        name: CUSTOMER_SEQ
+        target-column: ID
       select-sql: SELECT ID, NAME, AMOUNT FROM CUSTOMER ORDER BY ID
       insert-sql: INSERT INTO CUSTOMER(ID, NAME, AMOUNT) VALUES (?, ?, ?)
       fields:

@@ -1,5 +1,7 @@
 package com.datamigration.e2e;
 
+import static com.datamigration.support.MigrationAwait.await;
+
 import com.datamigration.api.*;
 import com.datamigration.support.*;
 import org.junit.jupiter.api.Test;
@@ -13,7 +15,7 @@ class H2ScenariosIT {
     @TempDir Path directory;
 
     @Test void independentTablesAtomicKeylessLobsCompositeKeysAndExplicitReimport() throws Exception {
-        try (var databases = new TcpDatabases(directory,false)) {
+        try (var databases = new TcpDatabases(directory)) {
             databases.seed(10_000); databases.seedDocuments();
             DatabaseFixture.execute(databases.targetUrl(), "INSERT INTO CUSTOMER VALUES(99999,'old',1)");
             DatabaseFixture.execute(databases.targetUrl(), "ALTER TABLE CUSTOMER ADD CONSTRAINT bad_customer CHECK(ID<>10000)");
@@ -23,7 +25,7 @@ class H2ScenariosIT {
             DatabaseFixture.execute(databases.targetUrl(),"ALTER TABLE ORDERS ADD CONSTRAINT bad_order CHECK(ID<>5 AND ID<>105)");
             DatabaseFixture.execute(databases.targetUrl(),"CREATE SEQUENCE ORDER_SEQ START WITH 1");
             try (var context = context(databases,"scenario")) {
-                var failure = catchThrowableOfType(() -> context.getBean(MigrationService.class).migrate(),MigrationException.class);
+                var failure = catchThrowableOfType(() -> await(context.getBean(MigrationService.class)),MigrationException.class);
                 assertThat(failure.result().tables()).extracting(TableResult::status).containsExactly(
                         TableResult.Status.FAILED,TableResult.Status.SUCCEEDED,TableResult.Status.SUCCEEDED);
                 assertThat(failure.result().tables().get(2).skippedRows()).isEqualTo(2);
@@ -36,14 +38,14 @@ class H2ScenariosIT {
 
             DatabaseFixture.execute(databases.targetUrl(),"ALTER TABLE CUSTOMER DROP CONSTRAINT bad_customer");
             try (var context = context(databases,"scenario")) {
-                assertThat(context.getBean(MigrationService.class).migrate().tables())
+                assertThat(await(context.getBean(MigrationService.class)).tables())
                         .allMatch(result -> result.status() == TableResult.Status.SUCCEEDED);
             }
             assertCustomerRows(databases);
             // New job explicitly clears/reimports. Existing success markers must not hide this work.
             DatabaseFixture.execute(databases.targetUrl(),"UPDATE CUSTOMER SET NAME='changed' WHERE ID=1");
             DatabaseFixture.execute(databases.targetUrl(),"UPDATE DOCUMENTS SET CONTENT=NULL WHERE ID=1");
-            try (var context = context(databases,"scenario-new")) { context.getBean(MigrationService.class).migrate(); }
+            try (var context = context(databases,"scenario-new")) { await(context.getBean(MigrationService.class)); }
             assertCustomerRows(databases); assertDocuments(databases);
             assertThat(scalar(databases,"SELECT COUNT(*) FROM ORDERS")).isEqualTo(248);
             assertThat(scalar(databases,"SELECT NEXT VALUE FOR ORDER_SEQ")).isEqualTo(252);
@@ -53,8 +55,7 @@ class H2ScenariosIT {
 
     private ConfigurableApplicationContext context(TcpDatabases databases,String job) {
         return new SpringApplicationBuilder(ResilienceHost.class).properties(databases.properties()).run(
-                "--spring.config.location=classpath:scenarios.yml", "--data-migration.job-id="+job,
-                "--host-databases.source.pool.maximum-pool-size=10", "--host-databases.target.pool.maximum-pool-size=10");
+                "--spring.config.location=classpath:scenarios.yml", "--data-migration.job-id="+job);
     }
     private long scalar(TcpDatabases databases,String sql) throws Exception {
         try (var connection=DatabaseFixture.connection(databases.targetUrl()); var statement=connection.createStatement();

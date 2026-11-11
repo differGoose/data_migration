@@ -1,21 +1,21 @@
 package com.datamigration.support;
 
+import static com.datamigration.support.MigrationAwait.await;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import com.datamigration.api.MigrationService;
 import com.datamigration.jdbc.DataSourceConnections;
 import com.datamigration.conversion.JdbcValueConverter;
 import com.datamigration.execution.JdbcMigrationEngine;
 import com.datamigration.jdbc.ConnectionAccess;
 import com.datamigration.properties.MigrationConfiguration;
-import com.datamigration.support.*;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.slf4j.LoggerFactory;
 import java.lang.reflect.*;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.sql.*;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import static org.assertj.core.api.Assertions.*;
 
@@ -24,8 +24,8 @@ public final class H2RecoveryWorker {
         public static void main(String[] args) {
             String mode=args[0];
             try (var context=new SpringApplicationBuilder(ResilienceHost.class)
-                    .initializers(application -> application.getBeanFactory().registerSingleton("processService",
-                            (MigrationService) () -> {
+                    .initializers(application -> application.getBeanFactory().registerSingleton("processEngine",
+                            (com.datamigration.execution.MigrationEngine) plan -> {
                                 var pools=application.getBean(DataSourceConnections.class);
                                 var config=application.getBean(MigrationConfiguration.class).get();
                                 ConnectionAccess access=new ConnectionAccess() {
@@ -64,7 +64,20 @@ public final class H2RecoveryWorker {
                                 }
                             }))
                     .run(java.util.Arrays.copyOfRange(args,1,args.length))) {
-                context.getBean(MigrationService.class).migrate();
+                if (mode.equals("after-sequence")) {
+                    Logger logger = (Logger) LoggerFactory.getLogger("com.datamigration");
+                    var crash = new AppenderBase<ILoggingEvent>() {
+                        @Override protected void append(ILoggingEvent event) {
+                            String message = event.getFormattedMessage();
+                            if (message.startsWith("Sequence finalization completed ") && message.endsWith("enabled=true")) {
+                                Runtime.getRuntime().halt(73);
+                            }
+                        }
+                    };
+                    crash.start();
+                    logger.addAppender(crash);
+                }
+                await(context.getBean(MigrationService.class));
             }
         }
     }

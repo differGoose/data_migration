@@ -36,9 +36,15 @@ select-sql is a SELECT supplied by a trusted administrator. insert-sql is a sing
 
 target-table must match the actual INSERT target; only plain table or schema.table identifiers are supported. primary-key lists stable, non-null, unique result columns and may represent a business unique key. Keep composite-key order, such as [TENANT_ID, ID], unchanged during recovery. SELECT does not support CTEs, runtime ? parameters, or locking queries. SQL validation does not replace read-only source permissions.
 
+## Verification after data transfer
+
+tables[].verification.enabled defaults to false. When enabled, sample-percent must be greater than zero and at most 100, with decimal values allowed independently per table. Verification compares source-query, whole-target-table, and audited counts before comparing sampled migrated content. Sample size is rounded up. Verification requires skip-limit=0, explicit INSERT columns, and plain question-mark parameters.
+
+Mismatches record VERIFICATION_MISMATCH and preserve data and checkpoints. Explicit retries repeat verification without inserting or clearing again. Query/network failures also preserve state. To reimport manually, stop migration, clear the target and all task audit rows, and call the original Runner. See [verification](table-verification.md) for state and cost details.
+
 ## Concurrency and connection capacity
 
-A shared JVM permit allows only one migrate execution; overlapping calls fail immediately across different Runners and Spring contexts. Concurrency inside one execution is unaffected. Deployment must prevent overlapping processes.
+Synchronous/asynchronous duplicates on one instance share its running execution and progress. A JVM-wide permit prevents overlapping engines across Runners and Spring contexts while retaining internal concurrency. Deployment must prevent overlapping processes.
 
 max-concurrent-tables controls table concurrency; worker-count controls concurrent blocks within a table:
 
@@ -47,7 +53,13 @@ max-concurrent-tables controls table concurrency; worker-count controls concurre
 | Keyed, W workers | W+1 | W+1 |
 | Keyless, 1 worker | 1 | 2 |
 
-Two keyed tables with one worker each require at least source 4 / target 4 when running together. The host declares migration capacity using builder.source/target or the source/target annotations' capacity. The component validates the budget before execution; declarations do not resize pools. Shared business pools need additional capacity reserved for business traffic.
+Use builder.source(source).target(target), or source/target annotations without capacity, for automatic HikariCP inspection. The budget sums the largest max-concurrent-tables demands on each endpoint. Two keyed single-worker tables need 4 connections per endpoint. Four two-worker tables need 12 per endpoint at table concurrency 4, or 6 at concurrency 2. A shared underlying source/target pool must satisfy their combined demand.
+
+Insufficient capacity fails before connection borrowing or SQL, reporting the endpoint, required capacity, and maximumPoolSize. A new synchronous call throws, while asynchronous failure is exposed through completion() and safe logs. Adjust the host pool and explicitly retry to re-read capacity. The component never resizes the pool or changes concurrency automatically.
+
+Automatic inspection supports HikariDataSource subclasses, Spring DelegatingDataSource chains, and standard JDBC unwrap. Unknown pools, unresolved routing targets, wrapper cycles, and unreadable positive limits fail explicitly. For custom/nonpooled sources, source(ds, capacity)/target(ds, capacity) and positive annotation capacities remain explicit declarations. When Hikari is recognized, a declaration cannot conceal a smaller actual maximum.
+
+The check validates configured maxima rather than currently idle connections. Reserve business capacity or use a dedicated migration pool. Optional explicit capacity can limit a shared pool's migration allowance. Every new attempt validates capacity and reads auditing again. Successful audited tables skip source access.
 
 The host manages pool acquisition timeouts, JDBC connect/read timeouts, connection recycling, and dynamic credentials. The Runner does not close DataSources. Borrowed connections use autoCommit=false and READ_COMMITTED; unfinished transactions are ended before restoring original autoCommit/isolation settings and returning the connection. Supply clean, independent connections, not wrappers around active business transaction Connections.
 
@@ -65,7 +77,7 @@ The host manages pool acquisition timeouts, JDBC connect/read timeouts, connecti
 | tables[].mode | APPEND_RESUME | Append and resume by default; no automatic deduplication or conflict updates |
 | tables[].sequence.enabled | false | Explicitly configure a named sequence and target column; calibrate after data completes |
 
-CLEAR_AND_REIMPORT explicitly DELETEs the entire target table, not just the source SELECT range. Recovery of the same job does not repeat an already completed preparation DELETE. A fresh full reimport requires a new job-id and an explicit decision about existing target data.
+CLEAR_AND_REIMPORT explicitly DELETEs the entire target table, not just the source SELECT range. Recovery of the same job does not repeat an already completed preparation DELETE. New work can use a new job-id with an explicit decision about existing target data. To manually restart the same task, stop migration and clear its target data and all corresponding audit records before calling the original Runner again; see [table verification](table-verification.md#manual-reimport).
 
 ## File overrides and configuration caching
 

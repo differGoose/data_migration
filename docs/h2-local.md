@@ -27,7 +27,6 @@ After migration, target CUSTOMER should contain 10,000 rows. Compare NAME/AMOUNT
 
 ```sh
 mvn -B -ntp verify "-Dit.test=H2MigrationIT"
-mvn -B -ntp verify "-Dit.test=H2TlsIT"
 ```
 
-Tests own their databases and host DataSources; H2Demo need not be running. TLS tests generate temporary certificates. H2 results do not replace real Oracle/PostgreSQL validation.
+Tests manage plain TCP databases and host DataSources themselves. H2Demo need not be running. H2 results do not replace real Oracle/PostgreSQL integration.

@@ -11,7 +11,7 @@ The primary key is `(job_id, task_name, batch_no)`:
 - `batch_no=0`: table summary and phase state, one record per table.
 - `batch_no>0`: table transaction blocks numbered from 1; each stores its range, expected count, and commit result.
 
-Restarting the same job/task reads these records: successful tables return immediately, while unfinished tables resume unsuccessful blocks. Each API invocation's runId distinguishes execution reports and does not affect recovery. A new job-id means new work; default append mode neither clears targets nor deduplicates against existing rows.
+Every call after the preceding attempt finishes reads the same job/task audit records again. Successful tables return audited results, while unfinished tables resume unsuccessful blocks. Missing summaries with remaining batch records report AUDIT_SUMMARY_MISSING and preserve the records for inspection. runId identifies an execution report, not recovery. A new job-id represents new work. Append mode neither clears targets nor deduplicates against existing target rows.
 
 The new version creates no internal `__table_lock__` records and stores no LOCK marker, ownership token, or fingerprint. The caller must keep configuration, actual DataSources, and source ranges unchanged during recovery; configuration drift is not detected. To change migration rules, plan new work and target-data handling instead of reusing old checkpoints.
 
@@ -21,7 +21,7 @@ The new version creates no internal `__table_lock__` records and stores no LOCK 
 | --- | --- |
 | job_id / task_name / batch_no | Composite primary key identifying the job, table task, and transaction block |
 | target_table | Resolved target-table name for locating the task |
-| state | PLANNED is pending, RUNNING is in progress, SUCCEEDED is complete; summaries may also be FINALIZING, FAILED, COMMIT_UNKNOWN, or FINALIZATION_FAILED |
+| state | PLANNED, RUNNING, SUCCEEDED, FINALIZING, FAILED, COMMIT_UNKNOWN, FINALIZATION_FAILED, and the verification states documented below |
 | lower_key / upper_key | Keyed block boundaries, lower exclusive and upper inclusive; typed JSON values, not concatenated SQL |
 | expected_rows | Source rows expected in this block, including allowed skips; the summary does not use this field for the total |
 | committed_rows | Committed writes in the block; the summary accumulates all successful blocks |
@@ -31,7 +31,7 @@ The new version creates no internal `__table_lock__` records and stores no LOCK 
 | total_rows | Full source-query count recorded during summary preparation; checked for source-count changes on recovery |
 | prepared | Summary flag for completed preparation; a keyed reimport DELETE commits with this flag and is not repeated on recovery |
 | planning_complete | Summary flag indicating all keyed ranges are planned; existing pending blocks must still finish |
-| data_complete | Summary flag indicating the data phase is complete; only sequence or other finalization remains |
+| data_complete | Data phase finished. Verification and sequence finalization follow. It remains true after a verification mismatch so retries skip data insertion |
 | error_code | Redacted error category, SQLState, or vendor code; no business rows or raw exception messages |
 | started_at / updated_at | Record creation time and latest update time |
 
@@ -77,3 +77,7 @@ The permit releases only after workers finish and transactions/connections are c
 DDL: [PostgreSQL](../src/main/resources/db/postgresql/migration-audit.sql), [H2](../src/main/resources/db/h2/migration-audit.sql). The running engine neither creates tables, alters old schemas, nor converts old checkpoints.
 
 Finish unfinished old-version jobs with that version first. Users manually prepare the new audit schema; a separate new audit table is recommended to retain history. Switch after no old jobs remain unfinished. Do not run the new version directly against an old table with a mandatory fingerprint column: inserts would fail because that column is no longer supplied. Local synthetic test fixtures manage only their own schemas.
+
+## Table verification and manual reimport
+
+Enable per-table verification to compare counts and sample migrated content. A mismatch records VERIFICATION_MISMATCH while preserving target data, successful batches, and data_complete=true. The attempt fails. An explicit subsequent call repeats verification, then runs sequence finalization and records SUCCEEDED if both succeed. Query failures record VERIFICATION_ERROR and preserve the same state. To reimport manually, stop migration, clear the intended target and all audit rows for that task, then call the original Runner again. See [table verification](table-verification.md).

@@ -19,9 +19,10 @@ The component uses SLF4J logger `com.datamigration` with English messages. Find 
 
 | stage | What to check |
 | --- | --- |
+| MIGRATION_REUSE | Duplicate call returning the running execution and its progress |
 | CONFIG_LOAD / CONFIG_BIND | Configuration resources, working directory, classpath, YAML indentation, unknown properties, and validation constraints. Unknown-field logs contain paths only; binding errors do not print rejected values |
 | DATASOURCE_RESOLVE | Both DataSources must be supplied directly, or exactly one marked Bean must exist per endpoint in Spring |
-| CAPACITY_CHECK | Declared migration capacity must meet the budget: W+1 per endpoint for keyed tables, source1/target2 for keyless tables. Add budgets for concurrently running tables; see the configuration guide |
+| CAPACITY_CHECK | Compare HikariCP maximumPoolSize and any explicit migration allowance against YAML concurrency. Keyed tables need W+1 on each side, keyless tables source 1 / target 2. Sum simultaneous table demand |
 | SOURCE_CONNECT / TARGET_CONNECT | The engine begins opening the corresponding connection; the production Runner further distinguishes acquisition and transaction initialization |
 | CONNECTION_ACQUIRE | Borrowing from the host DataSource failed. Use endpoint to distinguish source/target; check accounts, network, pool capacity, and acquisition timeouts |
 | CONNECTION_INITIALIZE | A connection was borrowed, but reading/setting transaction attributes failed; this differs from acquisition failure |
@@ -82,4 +83,25 @@ Alternatively, point the JVM at host configuration with `-Dlogback.configuration
 
 [BeforeStartupDemo](../src/test/java/com/datamigration/demo/BeforeStartupDemo.java) migrates before starting the host; run its main in an IDE with the test classpath to observe the order. [Simulated real host tests](manual-host-migration.md) use the same production entry; users provide real database settings.
 
-If the host DataSource factory fails before Runner is called, the component has not gained control and cannot log that step. The host should add its own safe factory-stage diagnostics. At every level, component messages exclude raw driver messages, stacks, SQL, parameters, business rows, key boundaries, JDBC URLs, passwords, and tokens. Other host, pool, and driver loggers remain the host's responsibility.
+A host factory failing before Runner invocation must log its own safe diagnostics. Component logs at every level omit driver messages, stacks, SQL, parameters, business rows, key boundaries, JDBC URLs, passwords, and tokens. Other host/pool/driver loggers remain host-managed.
+
+See [host execution](host-execution.md). Returning from migrateAsync() means an execution object is available. Inspect completion() or progress() for the background outcome.
+
+## Table verification and manual reimport
+
+Enable per-table verification to compare counts and sample migrated content. A mismatch records VERIFICATION_MISMATCH while preserving target data, successful batches, and data_complete=true. The attempt fails. An explicit subsequent call repeats verification, then runs sequence finalization and records SUCCEEDED if both succeed. Query failures record VERIFICATION_ERROR and preserve the same state. To reimport manually, stop migration, clear the intended target and all audit rows for that task, then call the original Runner again. See [table verification](table-verification.md).
+
+## Progress on every invocation
+
+Each migrate()/migrateAsync() call logs one INFO memory snapshot with overall status, finished, known tables, and committed/skipped counts. Per-table lines include state, totalRows, committedRows, and skippedRows. Running duplicates log the same current execution without starting another. Background completion logs the final snapshot.
+
+~~~text
+Migration progress at invocation ... status=RUNNING finished=false tablesKnown=true tables=2 committedRows=120 skippedRows=0
+Table migration progress ... task=customer ... state=RUNNING totalRows=1000 committedRows=100 skippedRows=0
+Table migration progress ... task=orders ... state=VERIFYING totalRows=20 committedRows=20 skippedRows=0
+Migration attempt finished ... status=SUCCEEDED finished=true tablesKnown=true tables=2 committedRows=1020 skippedRows=0
+~~~
+
+finished=true means the attempt ended. Inspect status to distinguish success and failure. Before initial configuration binding, tablesKnown=false. Before counting a known source query, totalRows=unknown. Counts include confirmed commits, not pending transactions. A new attempt reports the currently audited successful results.
+
+Logging uses thread-safe memory snapshots without borrowing connections, database queries, or background polling. Hosts can read execution.progress() continuously. After an attempt finishes, another migration call starts a new attempt and re-reads auditing. A new migrate() call waits, a new migrateAsync() call returns immediately, and running duplicates return immediately through either method. Enable INFO for com.datamigration in the host backend.

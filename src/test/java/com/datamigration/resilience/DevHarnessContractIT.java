@@ -11,7 +11,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.annotation.*;
 import static org.assertj.core.api.Assertions.*;
 
-/** Exercises the DEV path with manually prepared local servers; never claims Oracle/PG acceptance. */
+/**
+ * Uses local H2 to exercise the DEV harness with caller-provided data sources,
+ * covering target outage recovery and repeated calls against the same prepared databases.
+ */
 class DevHarnessContractIT {
     @TempDir Path directory;
     @Configuration(proxyBeanMethods = false)
@@ -26,7 +29,7 @@ class DevHarnessContractIT {
         }
     }
     @Test void externalDataSourcesSupportRepeatedCallsWithoutFixtureMutation() throws Exception {
-        try (var databases = new TcpDatabases(directory.resolve("prepared"), false)) {
+        try (var databases = new TcpDatabases(directory.resolve("prepared"))) {
             databases.seed(10000); // Explicit preparation by the caller, outside the suite.
             Path config = directory.resolve("dev.properties");
             var properties = new Properties();
